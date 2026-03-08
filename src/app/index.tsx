@@ -4,13 +4,12 @@ import { memo, startTransition, useEffect, useLayoutEffect, useRef, useState } f
 import {
   Modal,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   View,
   useWindowDimensions,
 } from 'react-native';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { Gesture, GestureDetector, ScrollView } from 'react-native-gesture-handler';
 import Animated, {
   cancelAnimation,
   Easing,
@@ -19,6 +18,7 @@ import Animated, {
   type SharedValue,
   useAnimatedStyle,
   useSharedValue,
+  withSpring,
   withTiming,
 } from 'react-native-reanimated';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -35,6 +35,7 @@ import {
   typography,
 } from '@/constants/theme';
 import {
+  addDays,
   addMonths,
   describeRelativeDay,
   formatMonthTitle,
@@ -101,6 +102,13 @@ const CALENDAR_VIEW_SWIPE_VELOCITY = 360;
 const CALENDAR_ROW_HEIGHT = 58;
 const MONTH_SNAP_DURATION = 260;
 const VIEW_MENU_RIGHT_OFFSET = spacing.md + 48;
+const CALENDAR_VIEW_SPRING = {
+  damping: 28,
+  stiffness: 280,
+  mass: 0.9,
+  restDisplacementThreshold: 0.001,
+  restSpeedThreshold: 0.001,
+} as const;
 
 type CalendarViewMode = 'month' | 'week';
 
@@ -110,6 +118,7 @@ type MonthGridPanelProps = {
   today: Date;
   selectedDate: Date | null;
   anchorWeekIndex: number;
+  showOutsideMonthDays: boolean;
   collapseProgress: SharedValue<number>;
   onDatePress: (date: Date) => void;
 };
@@ -118,6 +127,12 @@ type MonthWindow = {
   left: MonthRenderData;
   center: MonthRenderData;
   right: MonthRenderData;
+};
+
+type WeekWindow = {
+  left: Date;
+  center: Date;
+  right: Date;
 };
 
 function isDateInMonth(date: Date, month: Date) {
@@ -176,6 +191,22 @@ function buildMonthWindow(centerMonth: Date): MonthWindow {
   };
 }
 
+function buildWeekWindow(centerDate: Date): WeekWindow {
+  const safeDate = startOfDay(centerDate);
+
+  return {
+    left: addDays(safeDate, -7),
+    center: safeDate,
+    right: addDays(safeDate, 7),
+  };
+}
+
+function getDefaultSummaryDate(month: Date, today: Date) {
+  return month.getFullYear() === today.getFullYear() && month.getMonth() === today.getMonth()
+    ? today
+    : month;
+}
+
 function getAnchorWeekIndex(monthData: MonthRenderData, selectedDate: Date | null, today: Date) {
   const week = getDisplayedWeeks(monthData, selectedDate, today, true)[0];
 
@@ -192,6 +223,7 @@ const MonthGridPanel = memo(function MonthGridPanel({
   today,
   selectedDate,
   anchorWeekIndex,
+  showOutsideMonthDays,
   collapseProgress,
   onDatePress,
 }: MonthGridPanelProps) {
@@ -222,6 +254,7 @@ const MonthGridPanel = memo(function MonthGridPanel({
                   markers={cell.details.markers}
                   onPress={onDatePress}
                   secondaryLabel={`${cell.details.hinduMonthDay}`}
+                  showOutsideMonthDays={showOutsideMonthDays}
                 />
               );
             })}
@@ -236,6 +269,7 @@ const MonthGridPanel = memo(function MonthGridPanel({
     previousProps.anchorWeekIndex === nextProps.anchorWeekIndex &&
     previousProps.monthData.monthKey === nextProps.monthData.monthKey &&
     areDatesEqual(previousProps.selectedDate, nextProps.selectedDate) &&
+    previousProps.showOutsideMonthDays === nextProps.showOutsideMonthDays &&
     isSameDay(previousProps.today, nextProps.today) &&
     previousProps.collapseProgress === nextProps.collapseProgress
   );
@@ -246,8 +280,10 @@ export default function Index() {
   const { width: windowWidth } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const [monthWindow, setMonthWindow] = useState(() => buildMonthWindow(startOfMonth(today)));
+  const [weekWindow, setWeekWindow] = useState(() => buildWeekWindow(today));
   const [calendarViewMode, setCalendarViewMode] = useState<CalendarViewMode>('month');
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
+  const [displayedDate, setDisplayedDate] = useState(today);
   const [isViewMenuVisible, setIsViewMenuVisible] = useState(false);
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const monthPagerWidth = Math.min(layout.maxWidth, windowWidth - spacing.md * 2);
@@ -257,34 +293,55 @@ export default function Index() {
   const previousMonthData = monthWindow.left;
   const visibleMonthData = monthWindow.center;
   const nextMonthData = monthWindow.right;
-  const monthSubtitle = visibleMonthData.subtitle;
-  const summaryDate =
-    selectedDate ??
-    (visibleMonth.getFullYear() === today.getFullYear() && visibleMonth.getMonth() === today.getMonth()
-      ? today
-      : visibleMonth);
+  const isWeekView = calendarViewMode === 'week';
+  const summaryDate = displayedDate;
+  const headerMonth = isWeekView ? startOfMonth(displayedDate) : visibleMonth;
+  const headerMonthData = isWeekView ? getMonthRenderData(headerMonth) : visibleMonthData;
+  const monthSubtitle = headerMonthData.subtitle;
   const summaryDetails = getHinduDayDetails(summaryDate);
   const summaryText = `${formatWeekdayDate(summaryDate)}, ${describeRelativeDay(summaryDate, today).toLowerCase()}`;
-  const isWeekView = calendarViewMode === 'week';
+  const weekCenterDate = weekWindow.center;
+  const previousPanelMonthData = isWeekView
+    ? getMonthRenderData(startOfMonth(weekWindow.left))
+    : previousMonthData;
+  const currentPanelMonthData = isWeekView
+    ? getMonthRenderData(startOfMonth(weekCenterDate))
+    : visibleMonthData;
+  const nextPanelMonthData = isWeekView
+    ? getMonthRenderData(startOfMonth(weekWindow.right))
+    : nextMonthData;
+  const previousPanelSelectedDate = isWeekView ? weekWindow.left : selectedDate;
+  const currentPanelSelectedDate = isWeekView ? weekCenterDate : selectedDate;
+  const nextPanelSelectedDate = isWeekView ? weekWindow.right : selectedDate;
   const shouldExpandFestivalSection =
     isWeekView || (Boolean(selectedDate) && summaryDetails.festivalEntries.length > 0);
-  const currentAnchorWeekIndex = getAnchorWeekIndex(visibleMonthData, selectedDate, today);
-  const previousAnchorWeekIndex = getAnchorWeekIndex(previousMonthData, selectedDate, today);
-  const nextAnchorWeekIndex = getAnchorWeekIndex(nextMonthData, selectedDate, today);
-  const currentGridHeight = getMonthGridHeight(visibleMonthData.weeks.length);
-  const previousGridHeight = getMonthGridHeight(previousMonthData.weeks.length);
-  const nextGridHeight = getMonthGridHeight(nextMonthData.weeks.length);
+  const currentAnchorWeekIndex = isWeekView
+    ? getAnchorWeekIndex(currentPanelMonthData, weekCenterDate, weekCenterDate)
+    : getAnchorWeekIndex(visibleMonthData, selectedDate, today);
+  const previousAnchorWeekIndex = isWeekView
+    ? getAnchorWeekIndex(previousPanelMonthData, weekWindow.left, weekWindow.left)
+    : getAnchorWeekIndex(previousMonthData, selectedDate, today);
+  const nextAnchorWeekIndex = isWeekView
+    ? getAnchorWeekIndex(nextPanelMonthData, weekWindow.right, weekWindow.right)
+    : getAnchorWeekIndex(nextMonthData, selectedDate, today);
+  const currentGridHeight = getMonthGridHeight(currentPanelMonthData.weeks.length);
+  const previousGridHeight = getMonthGridHeight(previousPanelMonthData.weeks.length);
+  const nextGridHeight = getMonthGridHeight(nextPanelMonthData.weeks.length);
   const monthPagerTranslateX = useSharedValue(0);
   const collapseProgress = useSharedValue(isWeekView ? 1 : 0);
   const collapseStartProgress = useSharedValue(isWeekView ? 1 : 0);
-  const gestureAxis = useSharedValue<0 | 1 | 2>(0);
-  const pendingSwipeDirectionRef = useRef<-1 | 0 | 1>(0);
+  const pendingSwipeModeRef = useRef<'month' | 'week' | null>(null);
   const pendingFinalWindowRef = useRef<MonthWindow | null>(null);
+  const pendingFinalWeekWindowRef = useRef<WeekWindow | null>(null);
+  const pendingDisplayedDateRef = useRef<Date | null>(null);
+  const pendingSelectedDateRef = useRef<Date | null | undefined>(undefined);
 
   function selectDate(date: Date) {
     startTransition(() => {
       setSelectedDate(date);
+      setDisplayedDate(date);
       setMonthWindow(buildMonthWindow(startOfMonth(date)));
+      setWeekWindow(buildWeekWindow(date));
     });
   }
 
@@ -298,20 +355,31 @@ export default function Index() {
 
     if (nextMode === 'week' && !selectedDate) {
       setSelectedDate(summaryDate);
+      setDisplayedDate(summaryDate);
+      setWeekWindow(buildWeekWindow(summaryDate));
     }
   }
 
   function applyGestureViewMode(nextMode: CalendarViewMode) {
-    setCalendarViewMode(nextMode);
+    startTransition(() => {
+      if (calendarViewMode !== nextMode) {
+        setCalendarViewMode(nextMode);
+      }
 
-    if (nextMode === 'week' && !selectedDate) {
-      setSelectedDate(summaryDate);
-    }
+      if (nextMode === 'week' && !selectedDate) {
+        setSelectedDate(summaryDate);
+        setDisplayedDate(summaryDate);
+        setWeekWindow(buildWeekWindow(summaryDate));
+      }
+    });
   }
 
   function finalizeMonthSwipe(direction: number) {
     const outerMonth = addMonths(visibleMonth, direction * 2);
+    const targetMonth = direction === 1 ? monthWindow.right.month : monthWindow.left.month;
     primeMonthRenderData(outerMonth);
+    pendingDisplayedDateRef.current = getDefaultSummaryDate(targetMonth, today);
+    pendingSelectedDateRef.current = null;
 
     if (direction === 1) {
       const finalWindow: MonthWindow = {
@@ -320,7 +388,7 @@ export default function Index() {
         right: getMonthRenderData(addMonths(monthWindow.right.month, 1)),
       };
 
-      pendingSwipeDirectionRef.current = 1;
+      pendingSwipeModeRef.current = 'month';
       pendingFinalWindowRef.current = finalWindow;
       startTransition(() => {
         setMonthWindow({
@@ -328,7 +396,6 @@ export default function Index() {
           center: monthWindow.right,
           right: monthWindow.right,
         });
-        setSelectedDate(null);
       });
       return;
     }
@@ -339,7 +406,7 @@ export default function Index() {
       right: monthWindow.center,
     };
 
-    pendingSwipeDirectionRef.current = -1;
+    pendingSwipeModeRef.current = 'month';
     pendingFinalWindowRef.current = finalWindow;
     startTransition(() => {
       setMonthWindow({
@@ -347,7 +414,39 @@ export default function Index() {
         center: monthWindow.left,
         right: monthWindow.center,
       });
-      setSelectedDate(null);
+    });
+  }
+
+  function finalizeWeekSwipe(direction: number) {
+    const targetDate = direction === 1 ? weekWindow.right : weekWindow.left;
+    const futureDate = addDays(targetDate, direction * 7);
+    primeMonthRenderData(startOfMonth(futureDate));
+    pendingDisplayedDateRef.current = targetDate;
+    pendingSelectedDateRef.current = targetDate;
+
+    const finalWeekWindow =
+      direction === 1
+        ? buildWeekWindow(weekWindow.right)
+        : buildWeekWindow(weekWindow.left);
+    const finalMonthWindow = buildMonthWindow(startOfMonth(targetDate));
+
+    pendingSwipeModeRef.current = 'week';
+    pendingFinalWindowRef.current = finalMonthWindow;
+    pendingFinalWeekWindowRef.current = finalWeekWindow;
+    startTransition(() => {
+      setWeekWindow(
+        direction === 1
+          ? {
+              left: weekWindow.center,
+              center: weekWindow.right,
+              right: weekWindow.right,
+            }
+          : {
+              left: weekWindow.left,
+              center: weekWindow.left,
+              right: weekWindow.center,
+            }
+      );
     });
   }
 
@@ -357,78 +456,110 @@ export default function Index() {
   }, [visibleMonth]);
 
   useEffect(() => {
-    collapseProgress.value = withTiming(isWeekView ? 1 : 0, {
-      duration: MONTH_SNAP_DURATION,
-      easing: Easing.bezier(0.22, 1, 0.36, 1),
-    });
+    const targetProgress = isWeekView ? 1 : 0;
+
+    if (collapseProgress.value === targetProgress) {
+      return;
+    }
+
+    collapseProgress.value = withSpring(targetProgress, CALENDAR_VIEW_SPRING);
   }, [collapseProgress, isWeekView]);
 
   useLayoutEffect(() => {
-    if (pendingSwipeDirectionRef.current === 0) {
+    if (!pendingSwipeModeRef.current) {
       return;
     }
 
     monthPagerTranslateX.value = 0;
     const finalWindow = pendingFinalWindowRef.current;
-    pendingSwipeDirectionRef.current = 0;
+    const finalWeekWindow = pendingFinalWeekWindowRef.current;
+    const nextSelectedDate = pendingSelectedDateRef.current;
+    pendingSwipeModeRef.current = null;
     pendingFinalWindowRef.current = null;
+    pendingFinalWeekWindowRef.current = null;
+    pendingSelectedDateRef.current = undefined;
 
-    if (!finalWindow) {
+    if (!finalWindow && !finalWeekWindow) {
       return;
     }
 
+    const nextDisplayedDate = pendingDisplayedDateRef.current;
+    pendingDisplayedDateRef.current = null;
+
     requestAnimationFrame(() => {
       startTransition(() => {
-        setMonthWindow(finalWindow);
-      });
-    });
-  }, [monthPagerTranslateX, monthWindow]);
-
-  const calendarPanGesture = Gesture.Pan()
-    .enabled(!isMenuVisible && !isViewMenuVisible && monthPagerWidth > 0)
-    .minDistance(4)
-    .onBegin(() => {
-      cancelAnimation(monthPagerTranslateX);
-      cancelAnimation(collapseProgress);
-      collapseStartProgress.value = collapseProgress.value;
-      gestureAxis.value = 0;
-    })
-    .onUpdate((event) => {
-      if (gestureAxis.value === 0) {
-        if (Math.abs(event.translationX) < 6 && Math.abs(event.translationY) < 6) {
-          return;
+        if (finalWindow) {
+          setMonthWindow(finalWindow);
         }
 
-        gestureAxis.value = Math.abs(event.translationX) >= Math.abs(event.translationY) ? 1 : 2;
-      }
+        if (finalWeekWindow) {
+          setWeekWindow(finalWeekWindow);
+        }
 
-      if (gestureAxis.value === 1) {
-        monthPagerTranslateX.value = clampValue(event.translationX, -monthPagerWidth, monthPagerWidth);
-        return;
-      }
+        if (nextDisplayedDate) {
+          setDisplayedDate(nextDisplayedDate);
+        }
 
+        if (nextSelectedDate !== undefined) {
+          setSelectedDate(nextSelectedDate);
+        }
+      });
+    });
+  }, [monthPagerTranslateX, monthWindow, weekWindow]);
+
+  const viewModePanGesture = Gesture.Pan()
+    .enabled(!isMenuVisible && !isViewMenuVisible && monthPagerWidth > 0)
+    .activeOffsetY([-16, 16])
+    .failOffsetX([-18, 18])
+    .onBegin(() => {
+      cancelAnimation(collapseProgress);
+      collapseStartProgress.value = collapseProgress.value;
+    })
+    .onUpdate((event) => {
       const collapseRange = Math.max(currentGridHeight - CALENDAR_ROW_HEIGHT, 1);
       const nextProgress = collapseStartProgress.value - event.translationY / collapseRange;
       collapseProgress.value = clampValue(nextProgress, 0, 1);
     })
     .onEnd((event) => {
-      if (gestureAxis.value === 2) {
-        const targetMode =
-          event.translationY <= -CALENDAR_VIEW_SWIPE_DISTANCE ||
-          event.velocityY <= -CALENDAR_VIEW_SWIPE_VELOCITY
-            ? 'week'
-            : event.translationY >= CALENDAR_VIEW_SWIPE_DISTANCE ||
-                event.velocityY >= CALENDAR_VIEW_SWIPE_VELOCITY
-              ? 'month'
-              : collapseProgress.value >= 0.5
-                ? 'week'
-                : 'month';
+      const collapseRange = Math.max(currentGridHeight - CALENDAR_ROW_HEIGHT, 1);
+      const targetMode =
+        event.translationY <= -CALENDAR_VIEW_SWIPE_DISTANCE ||
+        event.velocityY <= -CALENDAR_VIEW_SWIPE_VELOCITY
+          ? 'week'
+          : event.translationY >= CALENDAR_VIEW_SWIPE_DISTANCE ||
+              event.velocityY >= CALENDAR_VIEW_SWIPE_VELOCITY
+            ? 'month'
+            : collapseProgress.value >= 0.5
+              ? 'week'
+              : 'month';
+      const targetProgress = targetMode === 'week' ? 1 : 0;
+      const springVelocity = clampValue(-event.velocityY / collapseRange, -4, 4);
 
-        gestureAxis.value = 0;
-        runOnJS(applyGestureViewMode)(targetMode);
-        return;
-      }
+      collapseProgress.value = withSpring(
+        targetProgress,
+        {
+          ...CALENDAR_VIEW_SPRING,
+          velocity: springVelocity,
+        },
+        (finished) => {
+          if (finished) {
+            runOnJS(applyGestureViewMode)(targetMode);
+          }
+        }
+      );
+    });
 
+  const monthSwipeGesture = Gesture.Pan()
+    .enabled(!isMenuVisible && !isViewMenuVisible && monthPagerWidth > 0)
+    .activeOffsetX([-16, 16])
+    .failOffsetY([-18, 18])
+    .onBegin(() => {
+      cancelAnimation(monthPagerTranslateX);
+    })
+    .onUpdate((event) => {
+      monthPagerTranslateX.value = clampValue(event.translationX, -monthPagerWidth, monthPagerWidth);
+    })
+    .onEnd((event) => {
       const isNextMonth =
         event.translationX <= -MONTH_SWIPE_DISTANCE || event.velocityX <= -MONTH_SWIPE_VELOCITY;
       const isPreviousMonth =
@@ -440,7 +571,6 @@ export default function Index() {
           duration: MONTH_SNAP_DURATION,
           easing: Easing.out(Easing.cubic),
         });
-        gestureAxis.value = 0;
         return;
       }
 
@@ -449,10 +579,9 @@ export default function Index() {
         easing: Easing.bezier(0.22, 1, 0.36, 1),
       }, (finished) => {
         if (finished) {
-          runOnJS(finalizeMonthSwipe)(direction);
+          runOnJS(isWeekView ? finalizeWeekSwipe : finalizeMonthSwipe)(direction);
         }
       });
-      gestureAxis.value = 0;
     });
 
   const monthPagerTrackStyle = useAnimatedStyle(() => ({
@@ -522,16 +651,17 @@ export default function Index() {
               paddingBottom: Math.max(insets.bottom, spacing.sm),
             },
           ]}>
-          <View style={styles.screenContent}>
-            <View style={styles.calendarSection}>
-              <View style={styles.pageShell}>
+            <View style={styles.screenContent}>
+              <View style={styles.calendarSection}>
+                <GestureDetector gesture={viewModePanGesture}>
+                  <View style={styles.pageShell}>
                 <View
                   renderToHardwareTextureAndroid
                   shouldRasterizeIOS
                   style={styles.calendarBlock}>
                   <View style={styles.monthHeaderRow}>
                     <View style={styles.monthHeading}>
-                      <Text style={styles.monthTitle}>{formatMonthTitle(visibleMonth)}</Text>
+                      <Text style={styles.monthTitle}>{formatMonthTitle(headerMonth)}</Text>
                       <ScrollView
                         bounces={false}
                         horizontal
@@ -555,7 +685,7 @@ export default function Index() {
                   </View>
                   <View style={styles.weekdayDivider} />
 
-                  <GestureDetector gesture={calendarPanGesture}>
+                  <GestureDetector gesture={monthSwipeGesture}>
                     <Animated.View style={[styles.monthGridViewport, monthGridViewportStyle]}>
                       <Animated.View
                         style={[
@@ -566,27 +696,30 @@ export default function Index() {
                         <MonthGridPanel
                           anchorWeekIndex={previousAnchorWeekIndex}
                           collapseProgress={collapseProgress}
-                          monthData={previousMonthData}
+                          monthData={previousPanelMonthData}
                           onDatePress={handleDatePress}
-                          selectedDate={selectedDate}
+                          selectedDate={previousPanelSelectedDate}
+                          showOutsideMonthDays={isWeekView}
                           today={today}
                           width={monthPagerWidth}
                         />
                         <MonthGridPanel
                           anchorWeekIndex={currentAnchorWeekIndex}
                           collapseProgress={collapseProgress}
-                          monthData={visibleMonthData}
+                          monthData={currentPanelMonthData}
                           onDatePress={handleDatePress}
-                          selectedDate={selectedDate}
+                          selectedDate={currentPanelSelectedDate}
+                          showOutsideMonthDays={isWeekView}
                           today={today}
                           width={monthPagerWidth}
                         />
                         <MonthGridPanel
                           anchorWeekIndex={nextAnchorWeekIndex}
                           collapseProgress={collapseProgress}
-                          monthData={nextMonthData}
+                          monthData={nextPanelMonthData}
                           onDatePress={handleDatePress}
-                          selectedDate={selectedDate}
+                          selectedDate={nextPanelSelectedDate}
+                          showOutsideMonthDays={isWeekView}
                           today={today}
                           width={monthPagerWidth}
                         />
@@ -610,7 +743,6 @@ export default function Index() {
                           : styles.emptyFestivalScrollContent
                       }
                       nestedScrollEnabled
-                      removeClippedSubviews
                       scrollEventThrottle={16}
                       showsVerticalScrollIndicator={summaryDetails.festivalEntries.length > 0}
                       style={styles.festivalScroll}>
@@ -645,7 +777,8 @@ export default function Index() {
                     )}
                   </ScrollView>
                 </View>
-              </View>
+                  </View>
+                </GestureDetector>
             </View>
           </View>
         </View>

@@ -11,6 +11,7 @@ type CalendarDayCellProps = {
   markers: MarkerKind[];
   isSelected: boolean;
   isToday: boolean;
+  showOutsideMonthDays?: boolean;
   onPress: (date: Date) => void;
 };
 
@@ -38,9 +39,12 @@ function CalendarDayCellComponent({
   markers,
   isSelected,
   isToday,
+  showOutsideMonthDays = false,
   onPress,
 }: CalendarDayCellProps) {
-  if (!day.inCurrentMonth) {
+  const isOutsideMonthDay = !day.inCurrentMonth;
+
+  if (isOutsideMonthDay && !showOutsideMonthDays) {
     return <View style={styles.emptyCell} />;
   }
 
@@ -54,6 +58,7 @@ function CalendarDayCellComponent({
         onPress={() => onPress(day.date)}
         style={({ pressed }) => [
           styles.dayButton,
+          isOutsideMonthDay && !isSelected && styles.outsideMonthButton,
           isSelected && styles.selectedButton,
           isToday && !isSelected && styles.todayButton,
           pressed && styles.pressed,
@@ -61,13 +66,25 @@ function CalendarDayCellComponent({
         <Text
           style={[
             styles.dayNumber,
-            { color: day.isWeekend ? weekendColor : palette.textPrimary },
+            {
+              color: isOutsideMonthDay
+                ? palette.textMuted
+                : day.isWeekend
+                  ? weekendColor
+                  : palette.textPrimary,
+            },
+            isOutsideMonthDay && !isSelected && styles.outsideMonthDayNumber,
             isSelected && styles.selectedDayNumber,
           ]}>
           {day.dayNumber}
         </Text>
         {secondaryLabel ? (
-          <Text style={[styles.secondaryLabel, isSelected && styles.selectedSecondaryLabel]}>
+          <Text
+            style={[
+              styles.secondaryLabel,
+              isOutsideMonthDay && !isSelected && styles.outsideMonthSecondaryLabel,
+              isSelected && styles.selectedSecondaryLabel,
+            ]}>
             {secondaryLabel}
           </Text>
         ) : (
@@ -76,7 +93,7 @@ function CalendarDayCellComponent({
       </Pressable>
 
       {!isSelected && markers.length > 0 ? (
-        <View style={styles.markersRow}>
+        <View style={[styles.markersRow, isOutsideMonthDay && !isSelected && styles.outsideMonthMarkersRow]}>
           {markers.map((marker, index) => (
             <View
               key={`${marker}-${index}`}
@@ -98,6 +115,7 @@ export const CalendarDayCell = memo(
     previousProps.secondaryLabel === nextProps.secondaryLabel &&
     previousProps.isSelected === nextProps.isSelected &&
     previousProps.isToday === nextProps.isToday &&
+    previousProps.showOutsideMonthDays === nextProps.showOutsideMonthDays &&
     areMarkerListsEqual(previousProps.markers, nextProps.markers)
 );
 
@@ -119,6 +137,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 2,
   },
+  outsideMonthButton: {
+    opacity: 0.72,
+  },
   selectedButton: {
     backgroundColor: palette.selected,
   },
@@ -138,6 +159,9 @@ const styles = StyleSheet.create({
   selectedDayNumber: {
     color: palette.selectedText,
   },
+  outsideMonthDayNumber: {
+    color: palette.textSecondary,
+  },
   secondaryLabel: {
     fontSize: typography.caption,
     lineHeight: 11,
@@ -146,6 +170,9 @@ const styles = StyleSheet.create({
   },
   selectedSecondaryLabel: {
     color: 'rgba(255,255,255,0.72)',
+  },
+  outsideMonthSecondaryLabel: {
+    color: palette.textMuted,
   },
   secondarySpacer: {
     minHeight: 11,
@@ -157,6 +184,9 @@ const styles = StyleSheet.create({
     gap: spacing.xxs,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  outsideMonthMarkersRow: {
+    opacity: 0.5,
   },
   markersSpacer: {
     minHeight: spacing.xs,
