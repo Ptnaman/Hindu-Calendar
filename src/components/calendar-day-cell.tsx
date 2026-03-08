@@ -1,0 +1,139 @@
+import { Pressable, StyleSheet, Text, View } from 'react-native';
+
+import { palette, radii, spacing, typography } from '@/constants/theme';
+import { CalendarDay } from '@/lib/calendar';
+import { MarkerKind } from '@/lib/panchang';
+
+type CalendarDayCellProps = {
+  day: CalendarDay;
+  secondaryLabel: string;
+  markers: MarkerKind[];
+  isSelected: boolean;
+  isToday: boolean;
+  onPress: (date: Date) => void;
+};
+
+const markerColorMap: Record<MarkerKind, string> = {
+  festival: palette.accent,
+  vrat: palette.accentSoft,
+  devotion: palette.textMuted,
+};
+
+export function CalendarDayCell({
+  day,
+  secondaryLabel,
+  markers,
+  isSelected,
+  isToday,
+  onPress,
+}: CalendarDayCellProps) {
+  if (!day.inCurrentMonth) {
+    return <View style={styles.emptyCell} />;
+  }
+
+  const weekendColor = day.date.getDay() === 0 ? palette.accent : palette.textPrimary;
+
+  return (
+    <View style={styles.slot}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Open ${day.date.toDateString()}`}
+        onPress={() => onPress(day.date)}
+        style={({ pressed }) => [
+          styles.dayButton,
+          isSelected && styles.selectedButton,
+          isToday && !isSelected && styles.todayButton,
+          pressed && styles.pressed,
+        ]}>
+        <Text
+          style={[
+            styles.dayNumber,
+            { color: day.isWeekend ? weekendColor : palette.textPrimary },
+            isSelected && styles.selectedDayNumber,
+          ]}>
+          {day.dayNumber}
+        </Text>
+        <Text style={[styles.secondaryLabel, isSelected && styles.selectedSecondaryLabel]}>
+          {secondaryLabel}
+        </Text>
+      </Pressable>
+
+      {!isSelected && markers.length > 0 ? (
+        <View style={styles.markersRow}>
+          {markers.map((marker, index) => (
+            <View
+              key={`${marker}-${index}`}
+              style={[styles.marker, { backgroundColor: markerColorMap[marker] }]}
+            />
+          ))}
+        </View>
+      ) : (
+        <View style={styles.markersSpacer} />
+      )}
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  slot: {
+    flex: 1,
+    minHeight: 72,
+    alignItems: 'center',
+  },
+  emptyCell: {
+    flex: 1,
+    minHeight: 72,
+  },
+  dayButton: {
+    width: 44,
+    height: 54,
+    borderRadius: radii.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 2,
+  },
+  selectedButton: {
+    backgroundColor: palette.selected,
+  },
+  todayButton: {
+    borderWidth: 1,
+    borderColor: palette.border,
+    backgroundColor: palette.surface,
+  },
+  pressed: {
+    opacity: 0.82,
+  },
+  dayNumber: {
+    fontSize: typography.title,
+    lineHeight: 24,
+    fontWeight: '600',
+  },
+  selectedDayNumber: {
+    color: palette.selectedText,
+  },
+  secondaryLabel: {
+    fontSize: typography.caption,
+    lineHeight: 12,
+    color: palette.textMuted,
+    fontWeight: '500',
+  },
+  selectedSecondaryLabel: {
+    color: 'rgba(255,255,255,0.72)',
+  },
+  markersRow: {
+    minHeight: spacing.sm,
+    paddingTop: spacing.xxs,
+    flexDirection: 'row',
+    gap: spacing.xxs,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  markersSpacer: {
+    minHeight: spacing.sm,
+  },
+  marker: {
+    width: 5,
+    height: 5,
+    borderRadius: radii.pill,
+  },
+});
