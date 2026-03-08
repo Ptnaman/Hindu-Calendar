@@ -53,9 +53,13 @@ export function CalendarDayCell({
           ]}>
           {day.dayNumber}
         </Text>
-        <Text style={[styles.secondaryLabel, isSelected && styles.selectedSecondaryLabel]}>
-          {secondaryLabel}
-        </Text>
+        {secondaryLabel ? (
+          <Text style={[styles.secondaryLabel, isSelected && styles.selectedSecondaryLabel]}>
+            {secondaryLabel}
+          </Text>
+        ) : (
+          <View style={styles.secondarySpacer} />
+        )}
       </Pressable>
 
       {!isSelected && markers.length > 0 ? (
@@ -77,16 +81,16 @@ export function CalendarDayCell({
 const styles = StyleSheet.create({
   slot: {
     flex: 1,
-    minHeight: 72,
+    minHeight: 58,
     alignItems: 'center',
   },
   emptyCell: {
     flex: 1,
-    minHeight: 72,
+    minHeight: 58,
   },
   dayButton: {
-    width: 44,
-    height: 54,
+    width: 40,
+    height: 46,
     borderRadius: radii.lg,
     alignItems: 'center',
     justifyContent: 'center',
@@ -104,8 +108,8 @@ const styles = StyleSheet.create({
     opacity: 0.82,
   },
   dayNumber: {
-    fontSize: typography.title,
-    lineHeight: 24,
+    fontSize: typography.body,
+    lineHeight: 18,
     fontWeight: '600',
   },
   selectedDayNumber: {
@@ -113,27 +117,30 @@ const styles = StyleSheet.create({
   },
   secondaryLabel: {
     fontSize: typography.caption,
-    lineHeight: 12,
+    lineHeight: 11,
     color: palette.textMuted,
     fontWeight: '500',
   },
   selectedSecondaryLabel: {
     color: 'rgba(255,255,255,0.72)',
   },
+  secondarySpacer: {
+    minHeight: 11,
+  },
   markersRow: {
-    minHeight: spacing.sm,
-    paddingTop: spacing.xxs,
+    minHeight: spacing.xs,
+    paddingTop: 2,
     flexDirection: 'row',
     gap: spacing.xxs,
     alignItems: 'center',
     justifyContent: 'center',
   },
   markersSpacer: {
-    minHeight: spacing.sm,
+    minHeight: spacing.xs,
   },
   marker: {
     width: 5,
     height: 5,
-    borderRadius: radii.pill,
+    borderRadius: radii.lg,
   },
 });

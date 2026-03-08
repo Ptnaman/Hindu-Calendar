@@ -102,8 +102,13 @@ export function getMonthMatrix(visibleMonth: Date) {
   const leadingDays = getMondayFirstIndex(monthStart);
   const gridStart = addDays(monthStart, -leadingDays);
   const weeks: CalendarDay[][] = [];
+  const monthEnd = new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() + 1, 0);
+  const trailingDays = 6 - getMondayFirstIndex(monthEnd);
+  const gridEnd = addDays(monthEnd, trailingDays);
+  const totalDays = differenceInCalendarDays(gridEnd, gridStart) + 1;
+  const totalWeeks = Math.ceil(totalDays / 7);
 
-  for (let week = 0; week < 6; week += 1) {
+  for (let week = 0; week < totalWeeks; week += 1) {
     const row: CalendarDay[] = [];
 
     for (let day = 0; day < 7; day += 1) {

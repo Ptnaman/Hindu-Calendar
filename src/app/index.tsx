@@ -1,25 +1,24 @@
 import { Feather } from '@expo/vector-icons';
-import { useHeaderHeight } from '@react-navigation/elements';
-import { Stack } from 'expo-router';
+import { Image } from 'expo-image';
 import { useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { CalendarDayCell } from '@/components/calendar-day-cell';
-import { layout, palette, radii, shadows, spacing, typography } from '@/constants/theme';
+import { festivalTheme, layout, palette, radii, shadows, spacing, typography } from '@/constants/theme';
 import {
   addMonths,
   describeRelativeDay,
   formatMonthTitle,
   formatWeekdayDate,
-  getDaysInMonth,
   getMonthMatrix,
   isSameDay,
   startOfDay,
   startOfMonth,
   WEEKDAY_LABELS,
 } from '@/lib/calendar';
-import { getHinduDayDetails, getMonthSubtitle, getUpcomingHighlights } from '@/lib/panchang';
+import { getHinduDayDetails, getMonthSubtitle } from '@/lib/panchang';
 
 const MENU_ITEMS = [
   {
@@ -31,7 +30,7 @@ const MENU_ITEMS = [
   {
     key: 'panchang',
     label: 'Daily Panchang',
-    description: 'Open full day details',
+    description: 'See selected day below',
     icon: 'sun',
   },
   {
@@ -48,31 +47,30 @@ const MENU_ITEMS = [
   },
 ] as const;
 
+const MONTH_SWIPE_DISTANCE = 48;
+const MONTH_SWIPE_VELOCITY = 420;
+
 export default function Index() {
   const today = startOfDay(new Date());
-  const headerHeight = useHeaderHeight();
+  const insets = useSafeAreaInsets();
   const [visibleMonth, setVisibleMonth] = useState(startOfMonth(today));
-  const [selectedDate, setSelectedDate] = useState(today);
+  const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const monthGrid = getMonthMatrix(visibleMonth);
-  const selectedDetails = getHinduDayDetails(selectedDate);
-  const upcomingHighlights = getUpcomingHighlights(selectedDate);
+  const headerHeight = insets.top + spacing.xs + 40 + spacing.xs;
+  const menuTopOffset = headerHeight + spacing.xs;
+  const monthSubtitle = getMonthSubtitle(visibleMonth);
+  const summaryDate =
+    selectedDate ??
+    (visibleMonth.getFullYear() === today.getFullYear() && visibleMonth.getMonth() === today.getMonth()
+      ? today
+      : visibleMonth);
+  const summaryDetails = getHinduDayDetails(summaryDate);
+  const summaryText = `${formatWeekdayDate(summaryDate)}, ${describeRelativeDay(summaryDate, today).toLowerCase()}`;
 
   function changeMonth(offset: number) {
-    const nextMonth = addMonths(visibleMonth, offset);
-    const nextSelectedDate = new Date(
-      nextMonth.getFullYear(),
-      nextMonth.getMonth(),
-      Math.min(selectedDate.getDate(), getDaysInMonth(nextMonth))
-    );
-
-    setVisibleMonth(nextMonth);
-    setSelectedDate(nextSelectedDate);
-  }
-
-  function jumpToToday() {
-    setVisibleMonth(startOfMonth(today));
-    setSelectedDate(today);
+    setVisibleMonth(addMonths(visibleMonth, offset));
+    setSelectedDate(null);
   }
 
   function selectDate(date: Date) {
@@ -80,161 +78,152 @@ export default function Index() {
     setVisibleMonth(startOfMonth(date));
   }
 
+  function handleDatePress(date: Date) {
+    selectDate(date);
+  }
+
+  function handleMonthSwipe(translationX: number, velocityX: number) {
+    if (
+      Math.abs(translationX) < MONTH_SWIPE_DISTANCE &&
+      Math.abs(velocityX) < MONTH_SWIPE_VELOCITY
+    ) {
+      return;
+    }
+
+    changeMonth(translationX < 0 ? 1 : -1);
+  }
+
+  const monthSwipeGesture = Gesture.Pan()
+    .enabled(!isMenuVisible)
+    .runOnJS(true)
+    .activeOffsetX([-24, 24])
+    .failOffsetY([-24, 24])
+    .onEnd((event) => {
+      handleMonthSwipe(event.translationX, event.velocityX);
+    });
+
   return (
     <SafeAreaView edges={['left', 'right', 'bottom']} style={styles.safeArea}>
-      <Stack.Screen
-        options={{
-          headerShown: true,
-          headerTransparent: true,
-          headerShadowVisible: false,
-          headerTitle: 'Hindu Calendar',
-          headerTitleAlign: 'left',
-          headerStyle: {
-            backgroundColor: 'transparent',
-          },
-          headerTitleStyle: {
-            color: palette.textPrimary,
-            fontSize: 19,
-            fontWeight: '700',
-          },
-          headerRight: () => (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={isMenuVisible ? 'Close menu' : 'Open menu'}
-              onPress={() => setIsMenuVisible((currentValue) => !currentValue)}
-              style={({ pressed }) => [
-                styles.headerMenuButton,
-                pressed && styles.pressedButton,
-              ]}>
-              <Feather color={palette.textPrimary} name="more-vertical" size={18} />
-            </Pressable>
-          ),
-        }}
-      />
-
-      <ScrollView
-        contentContainerStyle={[styles.contentContainer, { paddingTop: headerHeight + spacing.sm }]}
-        showsVerticalScrollIndicator={false}>
-        <View style={styles.pageShell}>
-          <View style={styles.monthHeaderRow}>
-            <View style={styles.monthHeading}>
-              <Text style={styles.monthTitle}>{formatMonthTitle(visibleMonth)}</Text>
-              <Text style={styles.monthSubtitle}>{getMonthSubtitle(visibleMonth)}</Text>
-            </View>
-
-            <View style={styles.monthStepper}>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Show previous month"
-                onPress={() => changeMonth(-1)}
-                style={({ pressed }) => [styles.stepperButton, pressed && styles.pressedButton]}>
-                <Feather color={palette.textPrimary} name="chevron-left" size={18} />
-              </Pressable>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Show next month"
-                onPress={() => changeMonth(1)}
-                style={({ pressed }) => [styles.stepperButton, pressed && styles.pressedButton]}>
-                <Feather color={palette.textPrimary} name="chevron-right" size={18} />
-              </Pressable>
-            </View>
-          </View>
-
-          <View style={styles.weekdayRow}>
-            {WEEKDAY_LABELS.map((weekday) => (
-              <Text key={weekday} style={styles.weekdayLabel}>
-                {weekday}
-              </Text>
-            ))}
-          </View>
-
-          <View style={styles.monthGrid}>
-            {monthGrid.map((week, weekIndex) => (
-              <View key={`week-${weekIndex}`} style={styles.weekRow}>
-                {week.map((day) => {
-                  const dayDetails = getHinduDayDetails(day.date);
-
-                  return (
-                    <CalendarDayCell
-                      key={day.key}
-                      day={day}
-                      isSelected={isSameDay(day.date, selectedDate)}
-                      isToday={isSameDay(day.date, today)}
-                      markers={dayDetails.markers}
-                      onPress={selectDate}
-                      secondaryLabel={`${dayDetails.pakshaDay}`}
-                    />
-                  );
-                })}
-              </View>
-            ))}
-          </View>
-
-          <View style={styles.selectionSummary}>
-            <Text style={styles.selectionLine}>
-              {formatWeekdayDate(selectedDate)} · {describeRelativeDay(selectedDate, today)}
-            </Text>
-            <Text style={styles.selectionTitle}>
-              {selectedDetails.observances[0] ?? selectedDetails.tithiLabel}
-            </Text>
-          </View>
-
-          <View style={styles.detailCard}>
-            <Text style={styles.cardEyebrow}>
-              {selectedDetails.hinduMonthLabel} · {selectedDetails.samvatLabel}
-            </Text>
-            <Text style={styles.cardTitle}>{selectedDetails.tithiLabel}</Text>
-            <Text style={styles.cardSubtitle}>
-              {selectedDetails.observances.length > 0
-                ? selectedDetails.observances.join(' • ')
-                : 'Quiet day for darshan, study, or personal reminders.'}
-            </Text>
-
-            <View style={styles.metricsGrid}>
-              <InfoTile label="Nakshatra" value={selectedDetails.nakshatra} />
-              <InfoTile label="Yoga" value={selectedDetails.yoga} />
-              <InfoTile label="Sunrise" value={selectedDetails.sunrise} />
-              <InfoTile label="Sunset" value={selectedDetails.sunset} />
-              <InfoTile label="Rahu Kaal" value={selectedDetails.rahuKaal} />
-              <InfoTile label="Brahma Muhurat" value={selectedDetails.brahmaMuhurat} />
-              <InfoTile label="Karana" value={selectedDetails.karana} />
-              <InfoTile label="Focus" value={selectedDetails.observances[0] ?? 'Daily Panchang'} />
-            </View>
-
-            <View style={styles.upcomingSection}>
-              <Text style={styles.upcomingHeading}>Upcoming highlights</Text>
-              {upcomingHighlights.map((highlight) => (
-                <View key={highlight.key} style={styles.highlightRow}>
-                  <Text style={styles.highlightTitle}>{highlight.title}</Text>
-                  <Text style={styles.highlightDate}>{highlight.dateLabel}</Text>
-                </View>
-              ))}
-            </View>
-
-            <Text style={styles.cardFootnote}>
-              This first build locks the UI and navigation flow; the exact city-based Panchang
-              engine plugs into the same layout next.
-            </Text>
-          </View>
-
-          <View style={styles.bottomActionRow}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Return to today"
-              onPress={jumpToToday}
-              style={({ pressed }) => [styles.todayButton, pressed && styles.pressedButton]}>
-              <Text style={styles.todayButtonText}>Today</Text>
-            </Pressable>
-
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Add reminder"
-              style={({ pressed }) => [styles.addButton, pressed && styles.pressedButton]}>
-              <Feather color={palette.textPrimary} name="plus" size={28} />
-            </Pressable>
-          </View>
+      <View style={[styles.headerShell, { paddingTop: insets.top }]}>
+        <View style={styles.appHeader}>
+          <Text numberOfLines={1} style={styles.appHeaderTitle}>
+            Hindu Calendar
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={isMenuVisible ? 'Close menu' : 'Open menu'}
+            onPress={() => setIsMenuVisible((currentValue) => !currentValue)}
+            style={({ pressed }) => [
+              styles.headerMenuButton,
+              pressed && styles.pressedButton,
+            ]}>
+            <Feather color={palette.textPrimary} name="more-vertical" size={18} />
+          </Pressable>
         </View>
-      </ScrollView>
+      </View>
+
+      <View style={styles.mainContent}>
+        <View
+          style={[
+            styles.calendarArea,
+            {
+              paddingTop: headerHeight + spacing.sm,
+              paddingBottom: Math.max(insets.bottom, spacing.sm),
+            },
+          ]}>
+          <GestureDetector gesture={monthSwipeGesture}>
+            <View style={styles.screenContent}>
+              <View style={styles.calendarSection}>
+                <View style={styles.pageShell}>
+                  <View style={styles.calendarBlock}>
+                    <View style={styles.monthHeaderRow}>
+                      <View style={styles.monthHeading}>
+                        <Text style={styles.monthTitle}>{formatMonthTitle(visibleMonth)}</Text>
+                        <Text style={styles.monthSubtitle}>{monthSubtitle}</Text>
+                      </View>
+                    </View>
+
+                    <View style={styles.weekdayRow}>
+                      {WEEKDAY_LABELS.map((weekday) => (
+                        <Text key={weekday} style={styles.weekdayLabel}>
+                          {weekday}
+                        </Text>
+                      ))}
+                    </View>
+                    <View style={styles.weekdayDivider} />
+
+                    <View style={styles.monthGrid}>
+                      {monthGrid.map((week, weekIndex) => (
+                        <View key={`week-${weekIndex}`} style={styles.weekRow}>
+                          {week.map((day) => {
+                            const dayDetails = getHinduDayDetails(day.date);
+
+                            return (
+                              <CalendarDayCell
+                                key={day.key}
+                                day={day}
+                                isSelected={selectedDate ? isSameDay(day.date, selectedDate) : false}
+                                isToday={isSameDay(day.date, today)}
+                                markers={dayDetails.markers}
+                                onPress={handleDatePress}
+                                secondaryLabel={`${dayDetails.hinduMonthDay}`}
+                              />
+                            );
+                          })}
+                        </View>
+                      ))}
+                    </View>
+
+                    <Text style={styles.calendarSummary}>{summaryText}</Text>
+                  </View>
+
+                  <View style={styles.festivalSection}>
+                    <ScrollView
+                      contentContainerStyle={
+                        summaryDetails.festivalEntries.length > 0
+                          ? styles.festivalScrollContent
+                          : styles.emptyFestivalScrollContent
+                      }
+                      showsVerticalScrollIndicator={summaryDetails.festivalEntries.length > 0}
+                      style={styles.festivalScroll}>
+                      {summaryDetails.festivalEntries.length > 0 ? (
+                        summaryDetails.festivalEntries.map((festival, index) => (
+                          <View
+                            key={`${festival.title}-${festival.category}-${index}`}
+                            style={styles.festivalCard}>
+                            <View style={styles.festivalAccent} />
+                            <View style={styles.festivalCopy}>
+                              <Text style={styles.festivalTitle}>{festival.title}</Text>
+                              <View style={styles.festivalMetaRow}>
+                                <Feather
+                                  color={palette.textMuted}
+                                  name="bookmark"
+                                  size={festivalTheme.metaIconSize}
+                                />
+                                <Text style={styles.festivalMeta}>{festival.category}</Text>
+                              </View>
+                            </View>
+                          </View>
+                        ))
+                      ) : (
+                        <View style={styles.emptyFestivalState}>
+                          <Image
+                            contentFit="contain"
+                            source={require('../../assets/images/no-festival.svg')}
+                            style={styles.emptyFestivalArt}
+                          />
+                          <Text style={styles.emptyFestivalTitle}>No festival</Text>
+                          
+                        </View>
+                      )}
+                    </ScrollView>
+                  </View>
+                </View>
+              </View>
+            </View>
+          </GestureDetector>
+        </View>
+      </View>
 
       <Modal
         animationType="fade"
@@ -245,7 +234,7 @@ export default function Index() {
         <View style={styles.menuRoot}>
           <Pressable style={StyleSheet.absoluteFill} onPress={() => setIsMenuVisible(false)} />
 
-          <View style={[styles.menuCard, { top: headerHeight + spacing.xs }]}>
+          <View style={[styles.menuCard, { top: menuTopOffset }]}>
             {MENU_ITEMS.map((item, index) => (
               <Pressable
                 key={item.key}
@@ -272,35 +261,64 @@ export default function Index() {
   );
 }
 
-type InfoTileProps = {
-  label: string;
-  value: string;
-};
-
-function InfoTile({ label, value }: InfoTileProps) {
-  return (
-    <View style={styles.infoTile}>
-      <Text style={styles.infoTileLabel}>{label}</Text>
-      <Text style={styles.infoTileValue}>{value}</Text>
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: palette.background,
   },
-  contentContainer: {
-    paddingHorizontal: spacing.md,
-    paddingTop: spacing.sm,
-    paddingBottom: spacing.xxl,
+  headerShell: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 10,
+    width: '100%',
+    paddingBottom: spacing.xs,
     alignItems: 'center',
+    paddingHorizontal: spacing.md,
+  },
+  appHeader: {
+    width: '100%',
+    maxWidth: layout.maxWidth,
+    height: 40,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.md,
+  },
+  appHeaderTitle: {
+    flex: 1,
+    color: palette.textPrimary,
+    fontSize: 19,
+    lineHeight: 24,
+    fontWeight: '700',
+  },
+  mainContent: {
+    flex: 1,
+    alignItems: 'center',
+    paddingHorizontal: spacing.md,
+  },
+  calendarArea: {
+    width: '100%',
+    maxWidth: layout.maxWidth,
+    flex: 1,
+  },
+  screenContent: {
+    width: '100%',
+    flex: 1,
+  },
+  calendarSection: {
+    width: '100%',
+    minHeight: 0,
+    flex: 1,
   },
   pageShell: {
     width: '100%',
-    maxWidth: layout.maxWidth,
-    gap: spacing.lg,
+    gap: spacing.sm,
+    flex: 1,
+  },
+  calendarBlock: {
+    gap: spacing.sm,
   },
   headerMenuButton: {
     width: 40,
@@ -315,7 +333,7 @@ const styles = StyleSheet.create({
   },
   monthHeaderRow: {
     flexDirection: 'row',
-    alignItems: 'flex-end',
+    alignItems: 'center',
     justifyContent: 'space-between',
     gap: spacing.md,
   },
@@ -326,187 +344,120 @@ const styles = StyleSheet.create({
   monthTitle: {
     color: palette.textPrimary,
     fontSize: typography.display,
-    lineHeight: 54,
+    lineHeight: 34,
     fontWeight: '700',
-    letterSpacing: -1.6,
+    letterSpacing: -0.8,
   },
   monthSubtitle: {
     color: palette.textSecondary,
     fontSize: typography.body,
-    lineHeight: 22,
-  },
-  monthStepper: {
-    flexDirection: 'row',
-    gap: spacing.xs,
-  },
-  stepperButton: {
-    width: 42,
-    height: 42,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: radii.pill,
-    backgroundColor: palette.surface,
-    borderWidth: 1,
-    borderColor: palette.border,
+    lineHeight: 18,
   },
   pressedButton: {
     opacity: 0.78,
   },
   weekdayRow: {
     flexDirection: 'row',
-    paddingBottom: spacing.xs,
+    paddingBottom: spacing.xxs,
   },
   weekdayLabel: {
     flex: 1,
     textAlign: 'center',
     color: palette.textSecondary,
-    fontSize: typography.body,
-    lineHeight: 22,
+    fontSize: typography.small,
+    lineHeight: 18,
     fontWeight: '500',
+  },
+  weekdayDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: palette.border,
+    opacity: 0.9,
+    marginBottom: spacing.xs,
   },
   monthGrid: {
     borderRadius: radii.lg,
     backgroundColor: palette.background,
-    gap: spacing.sm,
+    gap: spacing.xs,
+  },
+  calendarSummary: {
+    color: palette.textSecondary,
+    fontSize: typography.body,
+    lineHeight: 26,
+    fontWeight: '500',
+    paddingTop: spacing.sm,
+  },
+  festivalSection: {
+    height: festivalTheme.containerHeight,
+    minHeight: 0,
+    overflow: 'hidden',
+  },
+  festivalScroll: {
+    flex: 1,
+  },
+  festivalScrollContent: {
+    paddingTop: festivalTheme.listPaddingTop,
+    paddingBottom: festivalTheme.listPaddingBottom,
+    gap: festivalTheme.listGap,
+  },
+  emptyFestivalScrollContent: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    paddingBottom: festivalTheme.listPaddingBottom,
+  },
+  festivalCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.xs,
+  },
+  festivalAccent: {
+    width: festivalTheme.accentWidth,
+    height: festivalTheme.accentHeight,
+    borderRadius: radii.pill,
+    backgroundColor: festivalTheme.accentColor,
+    marginTop: 2,
+  },
+  festivalCopy: {
+    flex: 1,
+    gap: spacing.xxs,
+    paddingTop: 1,
+  },
+  festivalTitle: {
+    color: palette.textPrimary,
+    fontSize: festivalTheme.titleSize,
+    lineHeight: festivalTheme.titleLineHeight,
+    fontWeight: '500',
+    letterSpacing: festivalTheme.titleLetterSpacing,
+  },
+  festivalMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xxs,
+  },
+  festivalMeta: {
+    color: palette.textMuted,
+    fontSize: festivalTheme.metaSize,
+    lineHeight: festivalTheme.metaLineHeight,
+    fontWeight: '400',
+  },
+  emptyFestivalState: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: festivalTheme.emptyPaddingHorizontal,
+    paddingVertical: festivalTheme.emptyPaddingVertical,
+    gap: festivalTheme.emptyGap,
+  },
+  emptyFestivalArt: {
+    width: festivalTheme.emptyIllustrationWidth,
+    height: festivalTheme.emptyIllustrationHeight,
+  },
+  emptyFestivalTitle: {
+    color: festivalTheme.emptyTitleColor,
+    fontSize: festivalTheme.emptyTitleSize,
+    lineHeight: festivalTheme.emptyTitleLineHeight,
+    fontWeight: '400',
   },
   weekRow: {
     flexDirection: 'row',
-  },
-  selectionSummary: {
-    gap: spacing.xxs,
-  },
-  selectionLine: {
-    color: palette.textSecondary,
-    fontSize: typography.title,
-    lineHeight: 28,
-    fontWeight: '500',
-  },
-  selectionTitle: {
-    color: palette.textPrimary,
-    fontSize: typography.body,
-    lineHeight: 22,
-  },
-  detailCard: {
-    borderRadius: 30,
-    backgroundColor: palette.surface,
-    padding: spacing.lg,
-    gap: spacing.md,
-    borderWidth: 1,
-    borderColor: palette.border,
-    ...shadows,
-  },
-  cardEyebrow: {
-    color: palette.textSecondary,
-    fontSize: typography.small,
-    lineHeight: 18,
-    fontWeight: '600',
-  },
-  cardTitle: {
-    color: palette.textPrimary,
-    fontSize: 30,
-    lineHeight: 36,
-    fontWeight: '700',
-  },
-  cardSubtitle: {
-    color: palette.textSecondary,
-    fontSize: typography.body,
-    lineHeight: 24,
-  },
-  metricsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.sm,
-  },
-  infoTile: {
-    width: '48%',
-    borderRadius: radii.md,
-    backgroundColor: palette.surfaceMuted,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.sm,
-    gap: spacing.xxs,
-  },
-  infoTileLabel: {
-    color: palette.textMuted,
-    fontSize: typography.caption,
-    lineHeight: 14,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-    fontWeight: '700',
-  },
-  infoTileValue: {
-    color: palette.textPrimary,
-    fontSize: typography.small,
-    lineHeight: 18,
-    fontWeight: '600',
-  },
-  upcomingSection: {
-    gap: spacing.sm,
-  },
-  upcomingHeading: {
-    color: palette.textPrimary,
-    fontSize: typography.body,
-    lineHeight: 22,
-    fontWeight: '700',
-  },
-  highlightRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: spacing.xxs,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: palette.border,
-  },
-  highlightTitle: {
-    flex: 1,
-    color: palette.textPrimary,
-    fontSize: typography.body,
-    lineHeight: 22,
-    fontWeight: '500',
-    paddingRight: spacing.sm,
-  },
-  highlightDate: {
-    color: palette.textSecondary,
-    fontSize: typography.small,
-    lineHeight: 18,
-    fontWeight: '600',
-  },
-  cardFootnote: {
-    color: palette.textMuted,
-    fontSize: typography.caption,
-    lineHeight: 16,
-  },
-  bottomActionRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingTop: spacing.xs,
-  },
-  todayButton: {
-    minWidth: 104,
-    borderRadius: radii.pill,
-    backgroundColor: palette.surface,
-    borderWidth: 1,
-    borderColor: palette.border,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-    ...shadows,
-  },
-  todayButtonText: {
-    color: palette.textPrimary,
-    fontSize: typography.title,
-    lineHeight: 26,
-    fontWeight: '700',
-  },
-  addButton: {
-    width: 68,
-    height: 68,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: radii.pill,
-    backgroundColor: palette.surface,
-    borderWidth: 1,
-    borderColor: palette.border,
-    ...shadows,
   },
   menuRoot: {
     flex: 1,
