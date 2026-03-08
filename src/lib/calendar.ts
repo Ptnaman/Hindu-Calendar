@@ -8,6 +8,8 @@ export type CalendarDay = {
   isWeekend: boolean;
 };
 
+const monthMatrixCache = new Map<string, CalendarDay[][]>();
+
 export function startOfDay(date: Date) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate());
 }
@@ -34,6 +36,13 @@ export function buildDateKey(date: Date) {
   const day = `${date.getDate()}`.padStart(2, '0');
 
   return `${year}-${month}-${day}`;
+}
+
+export function buildMonthKey(date: Date) {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, '0');
+
+  return `${year}-${month}`;
 }
 
 export function isSameDay(left: Date, right: Date) {
@@ -99,6 +108,13 @@ function getMondayFirstIndex(date: Date) {
 
 export function getMonthMatrix(visibleMonth: Date) {
   const monthStart = startOfMonth(visibleMonth);
+  const cacheKey = buildMonthKey(monthStart);
+  const cachedMatrix = monthMatrixCache.get(cacheKey);
+
+  if (cachedMatrix) {
+    return cachedMatrix;
+  }
+
   const leadingDays = getMondayFirstIndex(monthStart);
   const gridStart = addDays(monthStart, -leadingDays);
   const weeks: CalendarDay[][] = [];
@@ -125,5 +141,6 @@ export function getMonthMatrix(visibleMonth: Date) {
     weeks.push(row);
   }
 
+  monthMatrixCache.set(cacheKey, weeks);
   return weeks;
 }

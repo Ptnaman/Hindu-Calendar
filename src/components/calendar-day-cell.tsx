@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { palette, radii, spacing, typography } from '@/constants/theme';
@@ -19,7 +20,19 @@ const markerColorMap: Record<MarkerKind, string> = {
   devotion: palette.textMuted,
 };
 
-export function CalendarDayCell({
+function areMarkerListsEqual(left: MarkerKind[], right: MarkerKind[]) {
+  if (left === right) {
+    return true;
+  }
+
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  return left.every((marker, index) => marker === right[index]);
+}
+
+function CalendarDayCellComponent({
   day,
   secondaryLabel,
   markers,
@@ -77,6 +90,16 @@ export function CalendarDayCell({
     </View>
   );
 }
+
+export const CalendarDayCell = memo(
+  CalendarDayCellComponent,
+  (previousProps, nextProps) =>
+    previousProps.day.key === nextProps.day.key &&
+    previousProps.secondaryLabel === nextProps.secondaryLabel &&
+    previousProps.isSelected === nextProps.isSelected &&
+    previousProps.isToday === nextProps.isToday &&
+    areMarkerListsEqual(previousProps.markers, nextProps.markers)
+);
 
 const styles = StyleSheet.create({
   slot: {

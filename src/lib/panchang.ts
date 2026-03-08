@@ -1,4 +1,4 @@
-import { getDaysInMonth } from '@/lib/calendar';
+import { CalendarDay, buildMonthKey, getDaysInMonth, getMonthMatrix, startOfMonth } from '@/lib/calendar';
 
 export type MarkerKind = 'festival' | 'vrat' | 'devotion';
 
@@ -24,6 +24,18 @@ export type HinduDayDetails = {
   festivalEntries: FestivalEntry[];
   observances: string[];
   markers: MarkerKind[];
+};
+
+export type MonthCellDetails = {
+  day: CalendarDay;
+  details: HinduDayDetails;
+};
+
+export type MonthRenderData = {
+  month: Date;
+  monthKey: string;
+  subtitle: string;
+  weeks: MonthCellDetails[][];
 };
 
 type HinduDayCore = Omit<HinduDayDetails, 'samvatLabel'>;
@@ -160,6 +172,7 @@ const RAHU_PART_BY_WEEKDAY = [8, 2, 7, 5, 6, 4, 3];
 
 const coreCache = new Map<string, HinduDayCore>();
 const detailsCache = new Map<string, HinduDayDetails>();
+const monthRenderCache = new Map<string, MonthRenderData>();
 const samvatStartCache = new Map<number, Date>();
 
 function buildDateKey(date: Date) {
@@ -525,7 +538,7 @@ export function getHinduDayDetails(date: Date): HinduDayDetails {
   return details;
 }
 
-export function getMonthSubtitle(date: Date) {
+function buildMonthSubtitle(date: Date) {
   const uniqueMonths = new Set<string>();
   const uniqueSamvatLabels = new Set<string>();
   const daysInMonth = getDaysInMonth(date);
@@ -537,7 +550,45 @@ export function getMonthSubtitle(date: Date) {
     uniqueSamvatLabels.add(details.samvatLabel);
   }
 
-  return [Array.from(uniqueMonths).join(' / '), Array.from(uniqueSamvatLabels).join(' / ')]
+  const monthLabel = Array.from(uniqueMonths).join(' / ');
+  const samvatYears = Array.from(uniqueSamvatLabels)
+    .map((label) => label.replace('Vikram Samvat ', '').trim())
     .filter(Boolean)
-    .join(' · ');
+    .join('/');
+
+  return [monthLabel, samvatYears].filter(Boolean).join(', ');
+}
+
+export function getMonthRenderData(date: Date): MonthRenderData {
+  const month = startOfMonth(date);
+  const monthKey = buildMonthKey(month);
+  const cachedValue = monthRenderCache.get(monthKey);
+
+  if (cachedValue) {
+    return cachedValue;
+  }
+
+  const weeks = getMonthMatrix(month).map((week) =>
+    week.map((day) => ({
+      day,
+      details: getHinduDayDetails(day.date),
+    }))
+  );
+  const monthRenderData: MonthRenderData = {
+    month,
+    monthKey,
+    subtitle: buildMonthSubtitle(month),
+    weeks,
+  };
+
+  monthRenderCache.set(monthKey, monthRenderData);
+  return monthRenderData;
+}
+
+export function primeMonthRenderData(date: Date) {
+  getMonthRenderData(date);
+}
+
+export function getMonthSubtitle(date: Date) {
+  return getMonthRenderData(date).subtitle;
 }

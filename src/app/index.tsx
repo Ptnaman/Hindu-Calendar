@@ -1,24 +1,56 @@
 import { Feather } from '@expo/vector-icons';
 import { Image } from 'expo-image';
-import { useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { memo, startTransition, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import {
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+  useWindowDimensions,
+} from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import Animated, {
+  cancelAnimation,
+  Easing,
+  interpolate,
+  runOnJS,
+  type SharedValue,
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from 'react-native-reanimated';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { CalendarDayCell } from '@/components/calendar-day-cell';
-import { festivalTheme, layout, palette, radii, shadows, spacing, typography } from '@/constants/theme';
+import {
+  calendarTheme,
+  festivalTheme,
+  layout,
+  palette,
+  radii,
+  shadows,
+  spacing,
+  typography,
+} from '@/constants/theme';
 import {
   addMonths,
   describeRelativeDay,
   formatMonthTitle,
   formatWeekdayDate,
-  getMonthMatrix,
   isSameDay,
   startOfDay,
   startOfMonth,
   WEEKDAY_LABELS,
 } from '@/lib/calendar';
-import { getHinduDayDetails, getMonthSubtitle } from '@/lib/panchang';
+import {
+  MonthCellDetails,
+  MonthRenderData,
+  getHinduDayDetails,
+  getMonthRenderData,
+  primeMonthRenderData,
+} from '@/lib/panchang';
 
 const MENU_ITEMS = [
   {
@@ -47,19 +79,185 @@ const MENU_ITEMS = [
   },
 ] as const;
 
+const VIEW_MODE_ITEMS = [
+  {
+    key: 'month',
+    label: 'Month view',
+    description: 'Show the full month',
+    icon: 'calendar',
+  },
+  {
+    key: 'week',
+    label: 'Week view',
+    description: 'Show one focused week',
+    icon: 'columns',
+  },
+] as const;
+
 const MONTH_SWIPE_DISTANCE = 48;
 const MONTH_SWIPE_VELOCITY = 420;
+const CALENDAR_VIEW_SWIPE_DISTANCE = 48;
+const CALENDAR_VIEW_SWIPE_VELOCITY = 360;
+const CALENDAR_ROW_HEIGHT = 58;
+const MONTH_SNAP_DURATION = 260;
+const VIEW_MENU_RIGHT_OFFSET = spacing.md + 48;
+
+type CalendarViewMode = 'month' | 'week';
+
+type MonthGridPanelProps = {
+  monthData: MonthRenderData;
+  width: number;
+  today: Date;
+  selectedDate: Date | null;
+  anchorWeekIndex: number;
+  collapseProgress: SharedValue<number>;
+  onDatePress: (date: Date) => void;
+};
+
+type MonthWindow = {
+  left: MonthRenderData;
+  center: MonthRenderData;
+  right: MonthRenderData;
+};
+
+function isDateInMonth(date: Date, month: Date) {
+  return date.getFullYear() === month.getFullYear() && date.getMonth() === month.getMonth();
+}
+
+function getDisplayedWeeks(
+  monthData: MonthRenderData,
+  selectedDate: Date | null,
+  today: Date,
+  collapseToSelectedWeek: boolean
+) {
+  const monthGrid = monthData.weeks;
+
+  if (!collapseToSelectedWeek) {
+    return monthGrid;
+  }
+
+  const anchorDate =
+    (selectedDate && isDateInMonth(selectedDate, monthData.month) ? selectedDate : null) ??
+    (isDateInMonth(today, monthData.month) ? today : monthData.month);
+  const selectedWeekIndex = monthGrid.findIndex((week) =>
+    week.some((cell) => isSameDay(cell.day.date, anchorDate))
+  );
+
+  return selectedWeekIndex >= 0 ? [monthGrid[selectedWeekIndex]] : monthGrid;
+}
+
+function getMonthGridHeight(weekCount: number) {
+  return weekCount * CALENDAR_ROW_HEIGHT + Math.max(0, weekCount - 1) * spacing.xs;
+}
+
+function clampValue(value: number, minimum: number, maximum: number) {
+  'worklet';
+
+  return Math.min(maximum, Math.max(minimum, value));
+}
+
+function areDatesEqual(left: Date | null, right: Date | null) {
+  if (left === right) {
+    return true;
+  }
+
+  if (!left || !right) {
+    return false;
+  }
+
+  return isSameDay(left, right);
+}
+
+function buildMonthWindow(centerMonth: Date): MonthWindow {
+  return {
+    left: getMonthRenderData(addMonths(centerMonth, -1)),
+    center: getMonthRenderData(centerMonth),
+    right: getMonthRenderData(addMonths(centerMonth, 1)),
+  };
+}
+
+function getAnchorWeekIndex(monthData: MonthRenderData, selectedDate: Date | null, today: Date) {
+  const week = getDisplayedWeeks(monthData, selectedDate, today, true)[0];
+
+  if (!week) {
+    return 0;
+  }
+
+  return monthData.weeks.findIndex((currentWeek) => currentWeek[0]?.day.key === week[0]?.day.key);
+}
+
+const MonthGridPanel = memo(function MonthGridPanel({
+  monthData,
+  width,
+  today,
+  selectedDate,
+  anchorWeekIndex,
+  collapseProgress,
+  onDatePress,
+}: MonthGridPanelProps) {
+  const panelAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [
+      {
+        translateY:
+          -anchorWeekIndex * (CALENDAR_ROW_HEIGHT + spacing.xs) * collapseProgress.value,
+      },
+    ],
+  }));
+
+  return (
+    <Animated.View
+      renderToHardwareTextureAndroid
+      shouldRasterizeIOS
+      style={[styles.monthGridPanel, { width }, panelAnimatedStyle]}>
+      <View style={styles.monthGrid}>
+        {monthData.weeks.map((week, weekIndex) => (
+          <View key={`${monthData.monthKey}-week-${weekIndex}`} style={styles.weekRow}>
+            {week.map((cell: MonthCellDetails) => {
+              return (
+                <CalendarDayCell
+                  key={cell.day.key}
+                  day={cell.day}
+                  isSelected={selectedDate ? isSameDay(cell.day.date, selectedDate) : false}
+                  isToday={isSameDay(cell.day.date, today)}
+                  markers={cell.details.markers}
+                  onPress={onDatePress}
+                  secondaryLabel={`${cell.details.hinduMonthDay}`}
+                />
+              );
+            })}
+          </View>
+        ))}
+      </View>
+    </Animated.View>
+  );
+}, (previousProps, nextProps) => {
+  return (
+    previousProps.width === nextProps.width &&
+    previousProps.anchorWeekIndex === nextProps.anchorWeekIndex &&
+    previousProps.monthData.monthKey === nextProps.monthData.monthKey &&
+    areDatesEqual(previousProps.selectedDate, nextProps.selectedDate) &&
+    isSameDay(previousProps.today, nextProps.today) &&
+    previousProps.collapseProgress === nextProps.collapseProgress
+  );
+});
 
 export default function Index() {
   const today = startOfDay(new Date());
+  const { width: windowWidth } = useWindowDimensions();
   const insets = useSafeAreaInsets();
-  const [visibleMonth, setVisibleMonth] = useState(startOfMonth(today));
+  const [monthWindow, setMonthWindow] = useState(() => buildMonthWindow(startOfMonth(today)));
+  const [calendarViewMode, setCalendarViewMode] = useState<CalendarViewMode>('month');
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
+  const [isViewMenuVisible, setIsViewMenuVisible] = useState(false);
   const [isMenuVisible, setIsMenuVisible] = useState(false);
-  const monthGrid = getMonthMatrix(visibleMonth);
+  const monthPagerWidth = Math.min(layout.maxWidth, windowWidth - spacing.md * 2);
   const headerHeight = insets.top + spacing.xs + 40 + spacing.xs;
   const menuTopOffset = headerHeight + spacing.xs;
-  const monthSubtitle = getMonthSubtitle(visibleMonth);
+  const visibleMonth = monthWindow.center.month;
+  const previousMonthData = monthWindow.left;
+  const visibleMonthData = monthWindow.center;
+  const nextMonthData = monthWindow.right;
+  const monthSubtitle = visibleMonthData.subtitle;
   const summaryDate =
     selectedDate ??
     (visibleMonth.getFullYear() === today.getFullYear() && visibleMonth.getMonth() === today.getMonth()
@@ -67,40 +265,215 @@ export default function Index() {
       : visibleMonth);
   const summaryDetails = getHinduDayDetails(summaryDate);
   const summaryText = `${formatWeekdayDate(summaryDate)}, ${describeRelativeDay(summaryDate, today).toLowerCase()}`;
-
-  function changeMonth(offset: number) {
-    setVisibleMonth(addMonths(visibleMonth, offset));
-    setSelectedDate(null);
-  }
+  const isWeekView = calendarViewMode === 'week';
+  const shouldExpandFestivalSection =
+    isWeekView || (Boolean(selectedDate) && summaryDetails.festivalEntries.length > 0);
+  const currentAnchorWeekIndex = getAnchorWeekIndex(visibleMonthData, selectedDate, today);
+  const previousAnchorWeekIndex = getAnchorWeekIndex(previousMonthData, selectedDate, today);
+  const nextAnchorWeekIndex = getAnchorWeekIndex(nextMonthData, selectedDate, today);
+  const currentGridHeight = getMonthGridHeight(visibleMonthData.weeks.length);
+  const previousGridHeight = getMonthGridHeight(previousMonthData.weeks.length);
+  const nextGridHeight = getMonthGridHeight(nextMonthData.weeks.length);
+  const monthPagerTranslateX = useSharedValue(0);
+  const collapseProgress = useSharedValue(isWeekView ? 1 : 0);
+  const collapseStartProgress = useSharedValue(isWeekView ? 1 : 0);
+  const gestureAxis = useSharedValue<0 | 1 | 2>(0);
+  const pendingSwipeDirectionRef = useRef<-1 | 0 | 1>(0);
+  const pendingFinalWindowRef = useRef<MonthWindow | null>(null);
 
   function selectDate(date: Date) {
-    setSelectedDate(date);
-    setVisibleMonth(startOfMonth(date));
+    startTransition(() => {
+      setSelectedDate(date);
+      setMonthWindow(buildMonthWindow(startOfMonth(date)));
+    });
   }
 
   function handleDatePress(date: Date) {
     selectDate(date);
   }
 
-  function handleMonthSwipe(translationX: number, velocityX: number) {
-    if (
-      Math.abs(translationX) < MONTH_SWIPE_DISTANCE &&
-      Math.abs(velocityX) < MONTH_SWIPE_VELOCITY
-    ) {
+  function handleViewModeChange(nextMode: CalendarViewMode) {
+    setCalendarViewMode(nextMode);
+    setIsViewMenuVisible(false);
+
+    if (nextMode === 'week' && !selectedDate) {
+      setSelectedDate(summaryDate);
+    }
+  }
+
+  function applyGestureViewMode(nextMode: CalendarViewMode) {
+    setCalendarViewMode(nextMode);
+
+    if (nextMode === 'week' && !selectedDate) {
+      setSelectedDate(summaryDate);
+    }
+  }
+
+  function finalizeMonthSwipe(direction: number) {
+    const outerMonth = addMonths(visibleMonth, direction * 2);
+    primeMonthRenderData(outerMonth);
+
+    if (direction === 1) {
+      const finalWindow: MonthWindow = {
+        left: monthWindow.center,
+        center: monthWindow.right,
+        right: getMonthRenderData(addMonths(monthWindow.right.month, 1)),
+      };
+
+      pendingSwipeDirectionRef.current = 1;
+      pendingFinalWindowRef.current = finalWindow;
+      startTransition(() => {
+        setMonthWindow({
+          left: monthWindow.center,
+          center: monthWindow.right,
+          right: monthWindow.right,
+        });
+        setSelectedDate(null);
+      });
       return;
     }
 
-    changeMonth(translationX < 0 ? 1 : -1);
+    const finalWindow: MonthWindow = {
+      left: getMonthRenderData(addMonths(monthWindow.left.month, -1)),
+      center: monthWindow.left,
+      right: monthWindow.center,
+    };
+
+    pendingSwipeDirectionRef.current = -1;
+    pendingFinalWindowRef.current = finalWindow;
+    startTransition(() => {
+      setMonthWindow({
+        left: monthWindow.left,
+        center: monthWindow.left,
+        right: monthWindow.center,
+      });
+      setSelectedDate(null);
+    });
   }
 
-  const monthSwipeGesture = Gesture.Pan()
-    .enabled(!isMenuVisible)
-    .runOnJS(true)
-    .activeOffsetX([-24, 24])
-    .failOffsetY([-24, 24])
-    .onEnd((event) => {
-      handleMonthSwipe(event.translationX, event.velocityX);
+  useEffect(() => {
+    primeMonthRenderData(addMonths(visibleMonth, -2));
+    primeMonthRenderData(addMonths(visibleMonth, 2));
+  }, [visibleMonth]);
+
+  useEffect(() => {
+    collapseProgress.value = withTiming(isWeekView ? 1 : 0, {
+      duration: MONTH_SNAP_DURATION,
+      easing: Easing.bezier(0.22, 1, 0.36, 1),
     });
+  }, [collapseProgress, isWeekView]);
+
+  useLayoutEffect(() => {
+    if (pendingSwipeDirectionRef.current === 0) {
+      return;
+    }
+
+    monthPagerTranslateX.value = 0;
+    const finalWindow = pendingFinalWindowRef.current;
+    pendingSwipeDirectionRef.current = 0;
+    pendingFinalWindowRef.current = null;
+
+    if (!finalWindow) {
+      return;
+    }
+
+    requestAnimationFrame(() => {
+      startTransition(() => {
+        setMonthWindow(finalWindow);
+      });
+    });
+  }, [monthPagerTranslateX, monthWindow]);
+
+  const calendarPanGesture = Gesture.Pan()
+    .enabled(!isMenuVisible && !isViewMenuVisible && monthPagerWidth > 0)
+    .minDistance(4)
+    .onBegin(() => {
+      cancelAnimation(monthPagerTranslateX);
+      cancelAnimation(collapseProgress);
+      collapseStartProgress.value = collapseProgress.value;
+      gestureAxis.value = 0;
+    })
+    .onUpdate((event) => {
+      if (gestureAxis.value === 0) {
+        if (Math.abs(event.translationX) < 6 && Math.abs(event.translationY) < 6) {
+          return;
+        }
+
+        gestureAxis.value = Math.abs(event.translationX) >= Math.abs(event.translationY) ? 1 : 2;
+      }
+
+      if (gestureAxis.value === 1) {
+        monthPagerTranslateX.value = clampValue(event.translationX, -monthPagerWidth, monthPagerWidth);
+        return;
+      }
+
+      const collapseRange = Math.max(currentGridHeight - CALENDAR_ROW_HEIGHT, 1);
+      const nextProgress = collapseStartProgress.value - event.translationY / collapseRange;
+      collapseProgress.value = clampValue(nextProgress, 0, 1);
+    })
+    .onEnd((event) => {
+      if (gestureAxis.value === 2) {
+        const targetMode =
+          event.translationY <= -CALENDAR_VIEW_SWIPE_DISTANCE ||
+          event.velocityY <= -CALENDAR_VIEW_SWIPE_VELOCITY
+            ? 'week'
+            : event.translationY >= CALENDAR_VIEW_SWIPE_DISTANCE ||
+                event.velocityY >= CALENDAR_VIEW_SWIPE_VELOCITY
+              ? 'month'
+              : collapseProgress.value >= 0.5
+                ? 'week'
+                : 'month';
+
+        gestureAxis.value = 0;
+        runOnJS(applyGestureViewMode)(targetMode);
+        return;
+      }
+
+      const isNextMonth =
+        event.translationX <= -MONTH_SWIPE_DISTANCE || event.velocityX <= -MONTH_SWIPE_VELOCITY;
+      const isPreviousMonth =
+        event.translationX >= MONTH_SWIPE_DISTANCE || event.velocityX >= MONTH_SWIPE_VELOCITY;
+      const direction = isNextMonth ? 1 : isPreviousMonth ? -1 : 0;
+
+      if (direction === 0) {
+        monthPagerTranslateX.value = withTiming(0, {
+          duration: MONTH_SNAP_DURATION,
+          easing: Easing.out(Easing.cubic),
+        });
+        gestureAxis.value = 0;
+        return;
+      }
+
+      monthPagerTranslateX.value = withTiming(direction === 1 ? -monthPagerWidth : monthPagerWidth, {
+        duration: MONTH_SNAP_DURATION,
+        easing: Easing.bezier(0.22, 1, 0.36, 1),
+      }, (finished) => {
+        if (finished) {
+          runOnJS(finalizeMonthSwipe)(direction);
+        }
+      });
+      gestureAxis.value = 0;
+    });
+
+  const monthPagerTrackStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: monthPagerTranslateX.value - monthPagerWidth }],
+  }));
+
+  const monthGridViewportStyle = useAnimatedStyle(() => {
+    if (monthPagerWidth <= 0) {
+      return { height: currentGridHeight };
+    }
+
+    const swipeProgress = monthPagerTranslateX.value / monthPagerWidth;
+    const targetHeight =
+      swipeProgress < 0
+        ? interpolate(-swipeProgress, [0, 1], [currentGridHeight, nextGridHeight])
+        : interpolate(swipeProgress, [0, 1], [currentGridHeight, previousGridHeight]);
+
+    return {
+      height: interpolate(collapseProgress.value, [0, 1], [targetHeight, CALENDAR_ROW_HEIGHT]),
+    };
+  });
 
   return (
     <SafeAreaView edges={['left', 'right', 'bottom']} style={styles.safeArea}>
@@ -109,16 +482,34 @@ export default function Index() {
           <Text numberOfLines={1} style={styles.appHeaderTitle}>
             Hindu Calendar
           </Text>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={isMenuVisible ? 'Close menu' : 'Open menu'}
-            onPress={() => setIsMenuVisible((currentValue) => !currentValue)}
-            style={({ pressed }) => [
-              styles.headerMenuButton,
-              pressed && styles.pressedButton,
-            ]}>
-            <Feather color={palette.textPrimary} name="more-vertical" size={18} />
-          </Pressable>
+          <View style={styles.headerActions}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={isViewMenuVisible ? 'Close calendar view options' : 'Open calendar view options'}
+              onPress={() => {
+                setIsMenuVisible(false);
+                setIsViewMenuVisible((currentValue) => !currentValue);
+              }}
+              style={({ pressed }) => [
+                styles.headerMenuButton,
+                pressed && styles.pressedButton,
+              ]}>
+              <Feather color={palette.textPrimary} name="calendar" size={18} />
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={isMenuVisible ? 'Close menu' : 'Open menu'}
+              onPress={() => {
+                setIsViewMenuVisible(false);
+                setIsMenuVisible((currentValue) => !currentValue);
+              }}
+              style={({ pressed }) => [
+                styles.headerMenuButton,
+                pressed && styles.pressedButton,
+              ]}>
+              <Feather color={palette.textPrimary} name="more-vertical" size={18} />
+            </Pressable>
+          </View>
         </View>
       </View>
 
@@ -127,103 +518,181 @@ export default function Index() {
           style={[
             styles.calendarArea,
             {
-              paddingTop: headerHeight + spacing.sm,
+              paddingTop: headerHeight,
               paddingBottom: Math.max(insets.bottom, spacing.sm),
             },
           ]}>
-          <GestureDetector gesture={monthSwipeGesture}>
-            <View style={styles.screenContent}>
-              <View style={styles.calendarSection}>
-                <View style={styles.pageShell}>
-                  <View style={styles.calendarBlock}>
-                    <View style={styles.monthHeaderRow}>
-                      <View style={styles.monthHeading}>
-                        <Text style={styles.monthTitle}>{formatMonthTitle(visibleMonth)}</Text>
-                        <Text style={styles.monthSubtitle}>{monthSubtitle}</Text>
-                      </View>
-                    </View>
-
-                    <View style={styles.weekdayRow}>
-                      {WEEKDAY_LABELS.map((weekday) => (
-                        <Text key={weekday} style={styles.weekdayLabel}>
-                          {weekday}
+          <View style={styles.screenContent}>
+            <View style={styles.calendarSection}>
+              <View style={styles.pageShell}>
+                <View
+                  renderToHardwareTextureAndroid
+                  shouldRasterizeIOS
+                  style={styles.calendarBlock}>
+                  <View style={styles.monthHeaderRow}>
+                    <View style={styles.monthHeading}>
+                      <Text style={styles.monthTitle}>{formatMonthTitle(visibleMonth)}</Text>
+                      <ScrollView
+                        bounces={false}
+                        horizontal
+                        nestedScrollEnabled
+                        showsHorizontalScrollIndicator={false}
+                        style={styles.monthSubtitleScroll}
+                        contentContainerStyle={styles.monthSubtitleScrollContent}>
+                        <Text numberOfLines={1} style={styles.monthSubtitle}>
+                          {monthSubtitle}
                         </Text>
-                      ))}
+                      </ScrollView>
                     </View>
-                    <View style={styles.weekdayDivider} />
-
-                    <View style={styles.monthGrid}>
-                      {monthGrid.map((week, weekIndex) => (
-                        <View key={`week-${weekIndex}`} style={styles.weekRow}>
-                          {week.map((day) => {
-                            const dayDetails = getHinduDayDetails(day.date);
-
-                            return (
-                              <CalendarDayCell
-                                key={day.key}
-                                day={day}
-                                isSelected={selectedDate ? isSameDay(day.date, selectedDate) : false}
-                                isToday={isSameDay(day.date, today)}
-                                markers={dayDetails.markers}
-                                onPress={handleDatePress}
-                                secondaryLabel={`${dayDetails.hinduMonthDay}`}
-                              />
-                            );
-                          })}
-                        </View>
-                      ))}
-                    </View>
-
-                    <Text style={styles.calendarSummary}>{summaryText}</Text>
                   </View>
 
-                  <View style={styles.festivalSection}>
-                    <ScrollView
+                  <View style={styles.weekdayRow}>
+                    {WEEKDAY_LABELS.map((weekday) => (
+                      <Text key={weekday} style={styles.weekdayLabel}>
+                        {weekday}
+                      </Text>
+                    ))}
+                  </View>
+                  <View style={styles.weekdayDivider} />
+
+                  <GestureDetector gesture={calendarPanGesture}>
+                    <Animated.View style={[styles.monthGridViewport, monthGridViewportStyle]}>
+                      <Animated.View
+                        style={[
+                          styles.monthPagerTrack,
+                          { width: monthPagerWidth * 3 },
+                          monthPagerTrackStyle,
+                        ]}>
+                        <MonthGridPanel
+                          anchorWeekIndex={previousAnchorWeekIndex}
+                          collapseProgress={collapseProgress}
+                          monthData={previousMonthData}
+                          onDatePress={handleDatePress}
+                          selectedDate={selectedDate}
+                          today={today}
+                          width={monthPagerWidth}
+                        />
+                        <MonthGridPanel
+                          anchorWeekIndex={currentAnchorWeekIndex}
+                          collapseProgress={collapseProgress}
+                          monthData={visibleMonthData}
+                          onDatePress={handleDatePress}
+                          selectedDate={selectedDate}
+                          today={today}
+                          width={monthPagerWidth}
+                        />
+                        <MonthGridPanel
+                          anchorWeekIndex={nextAnchorWeekIndex}
+                          collapseProgress={collapseProgress}
+                          monthData={nextMonthData}
+                          onDatePress={handleDatePress}
+                          selectedDate={selectedDate}
+                          today={today}
+                          width={monthPagerWidth}
+                        />
+                      </Animated.View>
+                    </Animated.View>
+                  </GestureDetector>
+
+                  <Text style={styles.calendarSummary}>{summaryText}</Text>
+                </View>
+
+                <View
+                  style={[
+                    styles.festivalSection,
+                    !shouldExpandFestivalSection && styles.compactFestivalSection,
+                    shouldExpandFestivalSection && styles.expandedFestivalSection,
+                  ]}>
+                  <ScrollView
                       contentContainerStyle={
                         summaryDetails.festivalEntries.length > 0
                           ? styles.festivalScrollContent
                           : styles.emptyFestivalScrollContent
                       }
+                      nestedScrollEnabled
+                      removeClippedSubviews
+                      scrollEventThrottle={16}
                       showsVerticalScrollIndicator={summaryDetails.festivalEntries.length > 0}
                       style={styles.festivalScroll}>
-                      {summaryDetails.festivalEntries.length > 0 ? (
-                        summaryDetails.festivalEntries.map((festival, index) => (
-                          <View
-                            key={`${festival.title}-${festival.category}-${index}`}
-                            style={styles.festivalCard}>
-                            <View style={styles.festivalAccent} />
-                            <View style={styles.festivalCopy}>
-                              <Text style={styles.festivalTitle}>{festival.title}</Text>
-                              <View style={styles.festivalMetaRow}>
-                                <Feather
-                                  color={palette.textMuted}
-                                  name="bookmark"
-                                  size={festivalTheme.metaIconSize}
-                                />
-                                <Text style={styles.festivalMeta}>{festival.category}</Text>
-                              </View>
+                    {summaryDetails.festivalEntries.length > 0 ? (
+                      summaryDetails.festivalEntries.map((festival, index) => (
+                        <View
+                          key={`${festival.title}-${festival.category}-${index}`}
+                          style={styles.festivalCard}>
+                          <View style={styles.festivalAccent} />
+                          <View style={styles.festivalCopy}>
+                            <Text style={styles.festivalTitle}>{festival.title}</Text>
+                            <View style={styles.festivalMetaRow}>
+                              <Feather
+                                color={palette.textMuted}
+                                name="bookmark"
+                                size={festivalTheme.metaIconSize}
+                              />
+                              <Text style={styles.festivalMeta}>{festival.category}</Text>
                             </View>
                           </View>
-                        ))
-                      ) : (
-                        <View style={styles.emptyFestivalState}>
-                          <Image
-                            contentFit="contain"
-                            source={require('../../assets/images/no-festival.svg')}
-                            style={styles.emptyFestivalArt}
-                          />
-                          <Text style={styles.emptyFestivalTitle}>No festival</Text>
-                          
                         </View>
-                      )}
-                    </ScrollView>
-                  </View>
+                      ))
+                    ) : (
+                      <View style={styles.emptyFestivalState}>
+                        <Image
+                          contentFit="contain"
+                          source={require('../../assets/images/no-festival.svg')}
+                          style={styles.emptyFestivalArt}
+                        />
+                        <Text style={styles.emptyFestivalTitle}>No festival</Text>
+                      </View>
+                    )}
+                  </ScrollView>
                 </View>
               </View>
             </View>
-          </GestureDetector>
+          </View>
         </View>
       </View>
+
+      <Modal
+        animationType="fade"
+        onRequestClose={() => setIsViewMenuVisible(false)}
+        statusBarTranslucent
+        transparent
+        visible={isViewMenuVisible}>
+        <View style={styles.menuRoot}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setIsViewMenuVisible(false)} />
+
+          <View style={[styles.viewMenuCard, { top: menuTopOffset, right: VIEW_MENU_RIGHT_OFFSET }]}>
+            {VIEW_MODE_ITEMS.map((item, index) => {
+              const isActive = calendarViewMode === item.key;
+
+              return (
+                <Pressable
+                  key={item.key}
+                  accessibilityRole="button"
+                  onPress={() => handleViewModeChange(item.key)}
+                  style={({ pressed }) => [
+                    styles.viewModeItem,
+                    index < VIEW_MODE_ITEMS.length - 1 && styles.menuItemBorder,
+                    isActive && styles.activeViewModeItem,
+                    pressed && styles.pressedButton,
+                  ]}>
+                  <View style={[styles.menuItemIcon, isActive && styles.activeViewModeIcon]}>
+                    <Feather
+                      color={isActive ? palette.selectedText : palette.textPrimary}
+                      name={item.icon}
+                      size={16}
+                    />
+                  </View>
+                  <View style={styles.menuItemCopy}>
+                    <Text style={styles.menuItemLabel}>{item.label}</Text>
+                    <Text style={styles.menuItemDescription}>{item.description}</Text>
+                  </View>
+                  {isActive ? <Feather color={palette.accent} name="check" size={16} /> : null}
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
+      </Modal>
 
       <Modal
         animationType="fade"
@@ -293,6 +762,11 @@ const styles = StyleSheet.create({
     lineHeight: 24,
     fontWeight: '700',
   },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
   mainContent: {
     flex: 1,
     alignItems: 'center',
@@ -350,8 +824,15 @@ const styles = StyleSheet.create({
   },
   monthSubtitle: {
     color: palette.textSecondary,
-    fontSize: typography.body,
-    lineHeight: 18,
+    fontSize: calendarTheme.monthSubtitleSize,
+    lineHeight: calendarTheme.monthSubtitleLineHeight,
+    letterSpacing: calendarTheme.monthSubtitleLetterSpacing,
+  },
+  monthSubtitleScroll: {
+    flexGrow: 0,
+  },
+  monthSubtitleScrollContent: {
+    paddingRight: spacing.lg,
   },
   pressedButton: {
     opacity: 0.78,
@@ -379,6 +860,17 @@ const styles = StyleSheet.create({
     backgroundColor: palette.background,
     gap: spacing.xs,
   },
+  monthGridViewport: {
+    width: '100%',
+    overflow: 'hidden',
+  },
+  monthPagerTrack: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  monthGridPanel: {
+    width: '100%',
+  },
   calendarSummary: {
     color: palette.textSecondary,
     fontSize: typography.body,
@@ -387,9 +879,14 @@ const styles = StyleSheet.create({
     paddingTop: spacing.sm,
   },
   festivalSection: {
-    height: festivalTheme.containerHeight,
     minHeight: 0,
     overflow: 'hidden',
+  },
+  compactFestivalSection: {
+    height: festivalTheme.containerHeight,
+  },
+  expandedFestivalSection: {
+    flex: 1,
   },
   festivalScroll: {
     flex: 1,
@@ -474,6 +971,16 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     ...shadows,
   },
+  viewMenuCard: {
+    position: 'absolute',
+    width: 220,
+    borderRadius: radii.lg,
+    backgroundColor: palette.surface,
+    borderWidth: 1,
+    borderColor: palette.border,
+    overflow: 'hidden',
+    ...shadows,
+  },
   menuItem: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -481,6 +988,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
     backgroundColor: palette.surface,
+  },
+  viewModeItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    backgroundColor: palette.surface,
+  },
+  activeViewModeItem: {
+    backgroundColor: 'rgba(197, 95, 45, 0.06)',
   },
   menuItemBorder: {
     borderBottomWidth: StyleSheet.hairlineWidth,
@@ -493,6 +1011,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderRadius: radii.pill,
     backgroundColor: palette.surfaceMuted,
+  },
+  activeViewModeIcon: {
+    backgroundColor: palette.accent,
   },
   menuItemCopy: {
     flex: 1,

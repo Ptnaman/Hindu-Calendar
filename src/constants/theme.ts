@@ -1,7 +1,7 @@
 import { Platform } from 'react-native';
 
 export const palette = {
-  background: '#F6F1EA',
+  background: '#fafbff',
   surface: '#FFFDF9',
   surfaceMuted: '#EEE6DC',
   surfaceStrong: '#E5DBD0',
@@ -36,9 +36,15 @@ export const radii = {
 export const typography = {
   display: 32,
   title: 21,
-  body: 15,
-  small: 12,
+  body: 17,
+  small: 15,
   caption: 11,
+} as const;
+
+export const calendarTheme = {
+  monthSubtitleSize: 14,
+  monthSubtitleLineHeight: 18,
+  monthSubtitleLetterSpacing: -0.1,
 } as const;
 
 export const festivalTheme = {
@@ -47,14 +53,14 @@ export const festivalTheme = {
   listPaddingTop: spacing.xs,
   listPaddingBottom: spacing.lg,
   accentWidth: 3,
-  accentHeight: 54,
+  accentHeight: 50,
   accentColor: '#E4B06A',
-  titleSize: 18,
+  titleSize: 16,
   titleLineHeight: 24,
   titleLetterSpacing: -0.2,
   metaIconSize: 13,
-  metaSize: 16,
-  metaLineHeight: 22,
+  metaSize: 14,
+  metaLineHeight: 20,
   emptyGap: spacing.xs,
   emptyPaddingHorizontal: spacing.md,
   emptyPaddingVertical: spacing.md,
