@@ -3,6 +3,8 @@ import { Image } from 'expo-image';
 import { memo, startTransition, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   Modal,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
   Pressable,
   StyleSheet,
   Text,
@@ -11,6 +13,8 @@ import {
 } from 'react-native';
 import { Gesture, GestureDetector, ScrollView } from 'react-native-gesture-handler';
 import Animated, {
+  FadeIn,
+  FadeInDown,
   cancelAnimation,
   Easing,
   interpolate,
@@ -55,28 +59,16 @@ import {
 
 const MENU_ITEMS = [
   {
-    key: 'settings',
-    label: 'Settings',
-    description: 'Language, location, reminders',
-    icon: 'settings',
+    key: 'goto',
+    label: 'Go to',
   },
   {
     key: 'panchang',
     label: 'Daily Panchang',
-    description: 'See selected day below',
-    icon: 'sun',
   },
   {
-    key: 'festivals',
-    label: 'Festivals',
-    description: 'Upcoming vrat and observances',
-    icon: 'star',
-  },
-  {
-    key: 'about',
-    label: 'About app',
-    description: 'Version and app info',
-    icon: 'info',
+    key: 'settings',
+    label: 'Settings',
   },
 ] as const;
 
@@ -109,14 +101,45 @@ const CALENDAR_VIEW_SPRING = {
   restDisplacementThreshold: 0.001,
   restSpeedThreshold: 0.001,
 } as const;
+const GO_TO_PICKER_ROW_HEIGHT = 44;
+const GO_TO_PICKER_VISIBLE_ROWS = 5;
+const GO_TO_PICKER_HEIGHT = GO_TO_PICKER_ROW_HEIGHT * GO_TO_PICKER_VISIBLE_ROWS;
+const GO_TO_PICKER_SIDE_PADDING = (GO_TO_PICKER_HEIGHT - GO_TO_PICKER_ROW_HEIGHT) / 2;
+const GO_TO_MONTH_OPTIONS = [
+  { label: 'Jan', value: 0 },
+  { label: 'Feb', value: 1 },
+  { label: 'Mar', value: 2 },
+  { label: 'Apr', value: 3 },
+  { label: 'May', value: 4 },
+  { label: 'Jun', value: 5 },
+  { label: 'Jul', value: 6 },
+  { label: 'Aug', value: 7 },
+  { label: 'Sep', value: 8 },
+  { label: 'Oct', value: 9 },
+  { label: 'Nov', value: 10 },
+  { label: 'Dec', value: 11 },
+] as const;
+const GO_TO_YEAR_OPTIONS = Array.from({ length: 201 }, (_, index) => {
+  const year = 1950 + index;
+
+  return {
+    label: `${year}`,
+    value: year,
+  };
+});
 
 type CalendarViewMode = 'month' | 'week';
+type GoToPickerOption = {
+  label: string;
+  value: number;
+};
 
 type MonthGridPanelProps = {
   monthData: MonthRenderData;
   width: number;
   today: Date;
   selectedDate: Date | null;
+  todayFocusToken: number;
   anchorWeekIndex: number;
   showOutsideMonthDays: boolean;
   collapseProgress: SharedValue<number>;
@@ -163,6 +186,19 @@ function getDisplayedWeeks(
 
 function getMonthGridHeight(weekCount: number) {
   return weekCount * CALENDAR_ROW_HEIGHT + Math.max(0, weekCount - 1) * spacing.xs;
+}
+
+function getClampedCalendarDay(year: number, monthIndex: number, day: number) {
+  return Math.min(day, new Date(year, monthIndex + 1, 0).getDate());
+}
+
+function formatGoToDate(date: Date) {
+  return new Intl.DateTimeFormat('en-US', {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+  }).format(date);
 }
 
 function clampValue(value: number, minimum: number, maximum: number) {
@@ -217,11 +253,102 @@ function getAnchorWeekIndex(monthData: MonthRenderData, selectedDate: Date | nul
   return monthData.weeks.findIndex((currentWeek) => currentWeek[0]?.day.key === week[0]?.day.key);
 }
 
+type GoToPickerColumnProps = {
+  items: readonly GoToPickerOption[];
+  selectedValue: number;
+  visible: boolean;
+  onSelect: (value: number) => void;
+};
+
+const GoToPickerColumn = memo(function GoToPickerColumn({
+  items,
+  selectedValue,
+  visible,
+  onSelect,
+}: GoToPickerColumnProps) {
+  const scrollRef = useRef<ScrollView | null>(null);
+  const selectedIndex = Math.max(
+    0,
+    items.findIndex((item) => item.value === selectedValue)
+  );
+
+  useEffect(() => {
+    if (!visible) {
+      return;
+    }
+
+    requestAnimationFrame(() => {
+      scrollRef.current?.scrollTo({
+        x: 0,
+        y: selectedIndex * GO_TO_PICKER_ROW_HEIGHT,
+        animated: false,
+      });
+    });
+  }, [selectedIndex, visible]);
+
+  function handleMomentumEnd(event: NativeSyntheticEvent<NativeScrollEvent>) {
+    const index = Math.max(
+      0,
+      Math.min(items.length - 1, Math.round(event.nativeEvent.contentOffset.y / GO_TO_PICKER_ROW_HEIGHT))
+    );
+
+    onSelect(items[index].value);
+  }
+
+  function handleItemPress(index: number, value: number) {
+    scrollRef.current?.scrollTo({
+      x: 0,
+      y: index * GO_TO_PICKER_ROW_HEIGHT,
+      animated: true,
+    });
+    onSelect(value);
+  }
+
+  return (
+    <View style={styles.goToPickerColumn}>
+      <ScrollView
+        bounces={false}
+        decelerationRate="fast"
+        onMomentumScrollEnd={handleMomentumEnd}
+        ref={scrollRef}
+        showsVerticalScrollIndicator={false}
+        snapToAlignment="start"
+        snapToInterval={GO_TO_PICKER_ROW_HEIGHT}
+        style={styles.goToPickerScroll}
+        contentContainerStyle={styles.goToPickerScrollContent}>
+        {items.map((item, index) => {
+          const distance = Math.abs(index - selectedIndex);
+          const isSelected = distance === 0;
+
+          return (
+            <Pressable
+              key={`${item.label}-${item.value}`}
+              onPress={() => handleItemPress(index, item.value)}
+              style={styles.goToPickerItem}>
+              <Text
+                style={[
+                  styles.goToPickerText,
+                  distance === 1 && styles.goToPickerNearText,
+                  distance >= 2 && styles.goToPickerFarText,
+                  isSelected && styles.goToPickerSelectedText,
+                ]}>
+                {item.label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </ScrollView>
+      <View pointerEvents="none" style={styles.goToPickerSelectionBand} />
+    </View>
+  );
+});
+
 const MonthGridPanel = memo(function MonthGridPanel({
   monthData,
   width,
   today,
   selectedDate,
+  todayFocusToken,
   anchorWeekIndex,
   showOutsideMonthDays,
   collapseProgress,
@@ -254,6 +381,7 @@ const MonthGridPanel = memo(function MonthGridPanel({
                   markers={cell.details.markers}
                   onPress={onDatePress}
                   secondaryLabel={`${cell.details.hinduMonthDay}`}
+                  todayFocusToken={todayFocusToken}
                   showOutsideMonthDays={showOutsideMonthDays}
                 />
               );
@@ -269,6 +397,7 @@ const MonthGridPanel = memo(function MonthGridPanel({
     previousProps.anchorWeekIndex === nextProps.anchorWeekIndex &&
     previousProps.monthData.monthKey === nextProps.monthData.monthKey &&
     areDatesEqual(previousProps.selectedDate, nextProps.selectedDate) &&
+    previousProps.todayFocusToken === nextProps.todayFocusToken &&
     previousProps.showOutsideMonthDays === nextProps.showOutsideMonthDays &&
     isSameDay(previousProps.today, nextProps.today) &&
     previousProps.collapseProgress === nextProps.collapseProgress
@@ -286,6 +415,11 @@ export default function Index() {
   const [displayedDate, setDisplayedDate] = useState(today);
   const [isViewMenuVisible, setIsViewMenuVisible] = useState(false);
   const [isMenuVisible, setIsMenuVisible] = useState(false);
+  const [isGoToVisible, setIsGoToVisible] = useState(false);
+  const [todayFocusToken, setTodayFocusToken] = useState(0);
+  const [goToMonthIndex, setGoToMonthIndex] = useState(today.getMonth());
+  const [goToDay, setGoToDay] = useState(today.getDate());
+  const [goToYear, setGoToYear] = useState(today.getFullYear());
   const monthPagerWidth = Math.min(layout.maxWidth, windowWidth - spacing.md * 2);
   const headerHeight = insets.top + spacing.xs + 40 + spacing.xs;
   const menuTopOffset = headerHeight + spacing.xs;
@@ -300,6 +434,15 @@ export default function Index() {
   const monthSubtitle = headerMonthData.subtitle;
   const summaryDetails = getHinduDayDetails(summaryDate);
   const summaryText = `${formatWeekdayDate(summaryDate)}, ${describeRelativeDay(summaryDate, today).toLowerCase()}`;
+  const goToResolvedDay = getClampedCalendarDay(goToYear, goToMonthIndex, goToDay);
+  const goToPreviewDate = new Date(goToYear, goToMonthIndex, goToResolvedDay);
+  const goToDayOptions = Array.from(
+    { length: new Date(goToYear, goToMonthIndex + 1, 0).getDate() },
+    (_, index) => ({
+      label: `${index + 1}`,
+      value: index + 1,
+    })
+  );
   const weekCenterDate = weekWindow.center;
   const previousPanelMonthData = isWeekView
     ? getMonthRenderData(startOfMonth(weekWindow.left))
@@ -347,6 +490,54 @@ export default function Index() {
 
   function handleDatePress(date: Date) {
     selectDate(date);
+  }
+
+  function triggerTodayFocusPulse() {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        setTodayFocusToken((currentValue) => currentValue + 1);
+      });
+    });
+  }
+
+  function handleTodayPress() {
+    setIsMenuVisible(false);
+    setIsViewMenuVisible(false);
+    setIsGoToVisible(false);
+
+    if (selectedDate && isSameDay(selectedDate, today) && isSameDay(displayedDate, today)) {
+      triggerTodayFocusPulse();
+      return;
+    }
+
+    selectDate(today);
+    triggerTodayFocusPulse();
+  }
+
+  function openGoToModal() {
+    const baseDate = summaryDate;
+
+    setGoToMonthIndex(baseDate.getMonth());
+    setGoToDay(baseDate.getDate());
+    setGoToYear(baseDate.getFullYear());
+    setIsMenuVisible(false);
+    requestAnimationFrame(() => {
+      setIsGoToVisible(true);
+    });
+  }
+
+  function handleMenuAction(itemKey: (typeof MENU_ITEMS)[number]['key']) {
+    if (itemKey === 'goto') {
+      openGoToModal();
+      return;
+    }
+
+    setIsMenuVisible(false);
+  }
+
+  function handleGoToConfirm() {
+    selectDate(goToPreviewDate);
+    setIsGoToVisible(false);
   }
 
   function handleViewModeChange(nextMode: CalendarViewMode) {
@@ -454,6 +645,12 @@ export default function Index() {
     primeMonthRenderData(addMonths(visibleMonth, -2));
     primeMonthRenderData(addMonths(visibleMonth, 2));
   }, [visibleMonth]);
+
+  useEffect(() => {
+    if (goToDay !== goToResolvedDay) {
+      setGoToDay(goToResolvedDay);
+    }
+  }, [goToDay, goToResolvedDay]);
 
   useEffect(() => {
     const targetProgress = isWeekView ? 1 : 0;
@@ -700,6 +897,7 @@ export default function Index() {
                           onDatePress={handleDatePress}
                           selectedDate={previousPanelSelectedDate}
                           showOutsideMonthDays={isWeekView}
+                          todayFocusToken={todayFocusToken}
                           today={today}
                           width={monthPagerWidth}
                         />
@@ -710,6 +908,7 @@ export default function Index() {
                           onDatePress={handleDatePress}
                           selectedDate={currentPanelSelectedDate}
                           showOutsideMonthDays={isWeekView}
+                          todayFocusToken={todayFocusToken}
                           today={today}
                           width={monthPagerWidth}
                         />
@@ -720,6 +919,7 @@ export default function Index() {
                           onDatePress={handleDatePress}
                           selectedDate={nextPanelSelectedDate}
                           showOutsideMonthDays={isWeekView}
+                          todayFocusToken={todayFocusToken}
                           today={today}
                           width={monthPagerWidth}
                         />
@@ -784,6 +984,91 @@ export default function Index() {
         </View>
       </View>
 
+      <View
+        pointerEvents="box-none"
+        style={[
+          styles.bottomActionBar,
+          {
+            left: spacing.md,
+            right: spacing.md,
+            bottom: Math.max(insets.bottom, spacing.md),
+          },
+        ]}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Jump to today"
+          onPress={handleTodayPress}
+          style={({ pressed }) => [
+            styles.todayActionButton,
+            pressed && styles.pressedButton,
+          ]}>
+          <Text style={styles.todayActionText}>Today</Text>
+        </Pressable>
+      </View>
+
+      <Modal
+        animationType="fade"
+        onRequestClose={() => setIsGoToVisible(false)}
+        statusBarTranslucent
+        transparent
+        visible={isGoToVisible}>
+        <Animated.View entering={FadeIn.duration(120)} style={styles.goToModalRoot}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setIsGoToVisible(false)} />
+
+          <Animated.View
+            entering={FadeInDown.duration(220)}
+            style={[
+              styles.goToSheet,
+              { paddingBottom: Math.max(insets.bottom, spacing.lg) },
+            ]}>
+            <Text style={styles.goToSheetTitle}>{formatGoToDate(goToPreviewDate)}</Text>
+
+            <View style={styles.goToPickerRow}>
+              <GoToPickerColumn
+                items={GO_TO_MONTH_OPTIONS}
+                onSelect={setGoToMonthIndex}
+                selectedValue={goToMonthIndex}
+                visible={isGoToVisible}
+              />
+              <GoToPickerColumn
+                items={goToDayOptions}
+                onSelect={setGoToDay}
+                selectedValue={goToResolvedDay}
+                visible={isGoToVisible}
+              />
+              <GoToPickerColumn
+                items={GO_TO_YEAR_OPTIONS}
+                onSelect={setGoToYear}
+                selectedValue={goToYear}
+                visible={isGoToVisible}
+              />
+            </View>
+
+            <View style={styles.goToActionRow}>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => setIsGoToVisible(false)}
+                style={({ pressed }) => [
+                  styles.goToActionButton,
+                  pressed && styles.pressedButton,
+                ]}>
+                <Text style={styles.goToCancelText}>Cancel</Text>
+              </Pressable>
+              <View style={styles.goToActionDivider} />
+              <Pressable
+                accessibilityRole="button"
+                onPress={handleGoToConfirm}
+                style={({ pressed }) => [
+                  styles.goToActionButton,
+                  pressed && styles.pressedButton,
+                ]}>
+                <Text style={styles.goToDoneText}>Done</Text>
+              </Pressable>
+            </View>
+          </Animated.View>
+        </Animated.View>
+      </Modal>
+
       <Modal
         animationType="fade"
         onRequestClose={() => setIsViewMenuVisible(false)}
@@ -833,31 +1118,27 @@ export default function Index() {
         statusBarTranslucent
         transparent
         visible={isMenuVisible}>
-        <View style={styles.menuRoot}>
+        <Animated.View entering={FadeIn.duration(120)} style={styles.menuRoot}>
           <Pressable style={StyleSheet.absoluteFill} onPress={() => setIsMenuVisible(false)} />
 
-          <View style={[styles.menuCard, { top: menuTopOffset }]}>
+          <Animated.View
+            entering={FadeInDown.duration(180)}
+            style={[styles.menuCard, { top: menuTopOffset }]}>
             {MENU_ITEMS.map((item, index) => (
               <Pressable
                 key={item.key}
                 accessibilityRole="button"
-                onPress={() => setIsMenuVisible(false)}
+                onPress={() => handleMenuAction(item.key)}
                 style={({ pressed }) => [
-                  styles.menuItem,
+                  styles.quickMenuItem,
                   index < MENU_ITEMS.length - 1 && styles.menuItemBorder,
                   pressed && styles.pressedButton,
                 ]}>
-                <View style={styles.menuItemIcon}>
-                  <Feather color={palette.textPrimary} name={item.icon} size={16} />
-                </View>
-                <View style={styles.menuItemCopy}>
-                  <Text style={styles.menuItemLabel}>{item.label}</Text>
-                  <Text style={styles.menuItemDescription}>{item.description}</Text>
-                </View>
+                <Text style={styles.quickMenuLabel}>{item.label}</Text>
               </Pressable>
             ))}
-          </View>
-        </View>
+          </Animated.View>
+        </Animated.View>
       </Modal>
     </SafeAreaView>
   );
@@ -1093,14 +1374,144 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: 'rgba(23, 20, 17, 0.08)',
   },
+  bottomActionBar: {
+    position: 'absolute',
+    zIndex: 12,
+    alignItems: 'flex-start',
+  },
+  todayActionButton: {
+    minWidth: 104,
+    height: 56,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radii.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 253, 249, 0.96)',
+    borderWidth: 1,
+    borderColor: 'rgba(222, 212, 201, 0.82)',
+    ...shadows,
+  },
+  todayActionText: {
+    color: palette.textPrimary,
+    fontSize: 17,
+    lineHeight: 22,
+    fontWeight: '600',
+    letterSpacing: -0.2,
+  },
+  goToModalRoot: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    paddingHorizontal: spacing.md,
+    backgroundColor: 'rgba(23, 20, 17, 0.18)',
+  },
+  goToSheet: {
+    borderRadius: 32,
+    backgroundColor: palette.surface,
+    paddingTop: spacing.xl,
+    paddingHorizontal: spacing.md,
+    gap: spacing.lg,
+    marginBottom: spacing.sm,
+    ...shadows,
+  },
+  goToSheetTitle: {
+    color: palette.textPrimary,
+    fontSize: 19,
+    lineHeight: 28,
+    fontWeight: '700',
+    textAlign: 'center',
+    letterSpacing: -0.3,
+  },
+  goToPickerRow: {
+    flexDirection: 'row',
+    gap: spacing.xs,
+    alignItems: 'center',
+  },
+  goToPickerColumn: {
+    flex: 1,
+    height: GO_TO_PICKER_HEIGHT,
+    position: 'relative',
+    alignItems: 'stretch',
+  },
+  goToPickerScroll: {
+    flex: 1,
+  },
+  goToPickerScrollContent: {
+    paddingVertical: GO_TO_PICKER_SIDE_PADDING,
+  },
+  goToPickerSelectionBand: {
+    position: 'absolute',
+    left: spacing.xs,
+    right: spacing.xs,
+    top: GO_TO_PICKER_SIDE_PADDING,
+    height: GO_TO_PICKER_ROW_HEIGHT,
+    borderRadius: radii.lg,
+    backgroundColor: 'rgba(241, 236, 229, 0.52)',
+    borderWidth: 1,
+    borderColor: 'rgba(222, 212, 201, 0.52)',
+  },
+  goToPickerItem: {
+    height: GO_TO_PICKER_ROW_HEIGHT,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  goToPickerText: {
+    color: palette.textMuted,
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: '400',
+    letterSpacing: -0.2,
+  },
+  goToPickerNearText: {
+    color: palette.textSecondary,
+    fontSize: 18,
+  },
+  goToPickerFarText: {
+    opacity: 0.35,
+  },
+  goToPickerSelectedText: {
+    color: palette.textPrimary,
+    fontSize: 22,
+    lineHeight: 28,
+    fontWeight: '600',
+  },
+  goToActionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(214, 204, 193, 0.82)',
+    paddingTop: spacing.sm,
+  },
+  goToActionButton: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: spacing.sm,
+  },
+  goToActionDivider: {
+    width: StyleSheet.hairlineWidth,
+    alignSelf: 'stretch',
+    backgroundColor: 'rgba(214, 204, 193, 0.82)',
+  },
+  goToCancelText: {
+    color: palette.textSecondary,
+    fontSize: typography.body,
+    lineHeight: 24,
+    fontWeight: '500',
+  },
+  goToDoneText: {
+    color: palette.accent,
+    fontSize: typography.body,
+    lineHeight: 24,
+    fontWeight: '600',
+  },
   menuCard: {
     position: 'absolute',
     right: spacing.md,
-    width: 250,
-    borderRadius: radii.lg,
-    backgroundColor: palette.surface,
+    width: 212,
+    borderRadius: 16,
+    backgroundColor: '#ffffff',
     borderWidth: 1,
-    borderColor: palette.border,
+    borderColor: '#ded4c9c7',
     overflow: 'hidden',
     ...shadows,
   },
@@ -1122,6 +1533,11 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
     backgroundColor: palette.surface,
   },
+  quickMenuItem: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    backgroundColor: 'transparent',
+  },
   viewModeItem: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1135,7 +1551,7 @@ const styles = StyleSheet.create({
   },
   menuItemBorder: {
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: palette.border,
+    borderBottomColor: 'rgba(214, 204, 193, 0.82)',
   },
   menuItemIcon: {
     width: 34,
@@ -1162,5 +1578,12 @@ const styles = StyleSheet.create({
     color: palette.textSecondary,
     fontSize: typography.small,
     lineHeight: 18,
+  },
+  quickMenuLabel: {
+    color: palette.textPrimary,
+    fontSize: 19,
+    lineHeight: 26,
+    fontWeight: '500',
+    letterSpacing: -0.2,
   },
 });
